@@ -13,7 +13,6 @@
 ```text
 .
 ├── compiler.py             # Main compiler script
-├── input.txt               # Sample source code
 └── tests/                  # Test suite folder
     ├── run_tests.sh        # Automated test suite runner
     ├── pass_*.txt / .out   # Positive test cases and expected outputs
