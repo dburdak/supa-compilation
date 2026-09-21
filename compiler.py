@@ -2,7 +2,6 @@ from llvmlite import ir
 import llvmlite.binding as llvm
 import argparse
 import sys
-import re
 
 parser = argparse.ArgumentParser()
 parser.add_argument("source_path", help="path to the .txt file with your code")
@@ -58,7 +57,7 @@ def raise_err(error_number, err_line, column, ue_part=""):
 
     msg = ERRORS.get(error_number, "unknown compilation error")
     if error_number in (10,11,12): msg += f" {ue_part}"
-    sys.stderr.write(f"compilation error: line {err_line}:{column} {msg}\n")
+    sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n")
     sys.exit(error_number)
 
 
@@ -93,7 +92,7 @@ def is_operator(b):
 def lex(data: bytes):
     lexer_lines, tokens = [], []
     state, start, line, col = "START", 0, 1, 1
-    to_close = False
+    open_brace_col = None
     start_col = 1
     i = 0
     while i <= len(data):  # one extra step: the end of input
@@ -105,8 +104,8 @@ def lex(data: bytes):
             elif b in (32, 9):
                 pass  # space, tab
             elif b == 10: # new line
-                if to_close:
-                    raise_err(9, line, col)
+                if open_brace_col is not None:
+                    raise_err(9, line, open_brace_col)
                 lexer_lines.append(tokens)
                 tokens = []
                 line += 1; col = 0
@@ -116,10 +115,10 @@ def lex(data: bytes):
                 state, start, start_col = "NUMBER", i, col
             elif b == ord("{"):
                 tokens.append(Token("lbrace","{", line, col))
-                to_close = True
+                open_brace_col = col
             elif b == ord("}"):
                 tokens.append(Token("rbrace", "}", line, col))
-                to_close = False
+                open_brace_col = None
             elif b == ord(":"):
                 state = "ASSIGN"
                 start_col = col
