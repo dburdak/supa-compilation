@@ -1,2 +1,1 @@
-(statement, exit, 1, 1)
-(constant, 42, 1, 6)
+Program exit with result 42

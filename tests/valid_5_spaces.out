@@ -1,7 +1,1 @@
-(typename, i32, 2, 3)
-(ident, space_var, 2, 10)
-(lbrace, {, 2, 22)
-(constant, 100, 2, 26)
-(rbrace, }, 2, 31)
-(statement, exit, 4, 1)
-(ident, space_var, 4, 8)
+Program exit with result 100

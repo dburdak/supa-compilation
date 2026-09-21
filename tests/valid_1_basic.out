@@ -1,7 +1,1 @@
-(typename, i32, 1, 1)
-(ident, x, 1, 5)
-(lbrace, {, 1, 7)
-(constant, 10, 1, 9)
-(rbrace, }, 1, 12)
-(statement, exit, 2, 1)
-(ident, x, 2, 6)
+Program exit with result 10

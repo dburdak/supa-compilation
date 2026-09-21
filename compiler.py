@@ -71,7 +71,7 @@ class Token:
         self.col = col
 
     def to_str(self):
-        return f"({self.kind}, {self.text}, {self.line}, {self.col})\n"
+        return f"({self.kind}, {self.text}, {self.line}, {self.col})"
 
 
 def is_alpha(b):
@@ -297,9 +297,8 @@ with open(args.output_path, "w") as out_f:
 
     
 if args.tokens:
-    for line in lexer_lines:
+    for line in lines:
         for token in line:
-            token.print()
-            print(" ")
-        print("\n")
+            print(token.to_str() + " ")
+        print()
 

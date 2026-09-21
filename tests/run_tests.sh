@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# run_tests.sh — runs compiler.py against every test in this folder and
-# checks the result against the matching .out (valid_*) or .err (invalid_*) file.
-#
-# Usage:
-#   ./run_tests.sh                 # assumes compiler.py is at ../compiler.py
-#   ./run_tests.sh /path/to/compiler.py
+# run_tests.sh — runs compiler.py against every test in this folder,
+# executes the LLVM IR, and checks the result against the matching .out file.
 
 set -uo pipefail
 
@@ -20,35 +16,15 @@ if [ ! -f "$COMPILER" ]; then
 fi
 
 TMP_LL="$(mktemp /tmp/run_tests_XXXXXX.ll)"
-DUMMY_LL="$(mktemp /tmp/run_tests_dummy_XXXXXX.ll)"
-trap 'rm -f "$TMP_LL" "$DUMMY_LL"' EXIT
+trap 'rm -f "$TMP_LL"' EXIT
 
 PASS=0
 FAIL=0
 
-GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; NC='\033[0m'
-
-# Reruns the compiler as a Python module (instead of a subprocess) so we can
-# reach into its `lines` variable (the token stream from lex()) and print
-# each token with the project's own Token.to_str(), the same format .out
-# files are written in. This only runs for programs the CLI already accepted.
-dump_tokens() {
-    local src="$1"
-    "$PYTHON" - "$COMPILER" "$src" "$DUMMY_LL" <<'PYEOF'
-import sys, importlib.util
-
-compiler_path, source_path, dummy_out = sys.argv[1], sys.argv[2], sys.argv[3]
-sys.argv = [compiler_path, source_path, dummy_out]
-
-spec = importlib.util.spec_from_file_location("compiler_under_test", compiler_path)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-
-for line in mod.lines:
-    for tok in line:
-        sys.stdout.write(tok.to_str())
-PYEOF
-}
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
 
 run_valid() {
     local name="$1"
@@ -60,6 +36,7 @@ run_valid() {
         return
     fi
 
+    # 1. Запускаємо компілятор (генеруємо LLVM IR у $TMP_LL)
     local stderr_output exit_code
     stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
     exit_code=$?
@@ -67,20 +44,42 @@ run_valid() {
     if [ "$exit_code" -ne 0 ]; then
         echo -e "${RED}FAIL${NC} $name: compiler exited with code $exit_code (expected 0)"
         [ -n "$stderr_output" ] && echo "       stderr: $stderr_output"
+        
+        # Виводимо токени для зручного дебагу
+        echo "       Tokens stream:"
+        "$PYTHON" "$COMPILER" --tokens "$txt" "$TMP_LL" | sed 's/^/         /'
+        
         FAIL=$((FAIL + 1))
         return
     fi
 
-    local actual_out expected_content
-    actual_out="$(dump_tokens "$txt")"
+    # 2. Виконуємо згенерований код за допомогою lli (LLVM interpreter)
+    local actual_out expected_content lli_exit
+    actual_out=$(lli "$TMP_LL" 2>&1)
+    lli_exit=$?
+
+    if [ "$lli_exit" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: execution (lli) failed with code $lli_exit"
+        echo "       output: $actual_out"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
     expected_content="$(cat "$expected_out")"
 
+    # 3. Порівнюємо результат виконання із .out файлом
     if [ "$actual_out" == "$expected_content" ]; then
         echo -e "${GREEN}PASS${NC} $name"
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}FAIL${NC} $name: token stream differs from ${name}.out"
-        diff <(echo "$actual_out") <(echo "$expected_content") | sed 's/^/       /'
+        echo -e "${RED}FAIL${NC} $name: execution result differs from ${name}.out"
+        echo "       expected: $expected_content"
+        echo "       actual:   $actual_out"
+        
+        # Виводимо токени, щоб побачити, як програма розбила код, що дав неправильний результат
+        echo "       Tokens stream:"
+        "$PYTHON" "$COMPILER" --tokens "$txt" "$TMP_LL" | sed 's/^/         /'
+        
         FAIL=$((FAIL + 1))
     fi
 }
@@ -96,6 +95,7 @@ run_invalid() {
     fi
 
     local actual_err exit_code expected_content
+    # Запускаємо компілятор, очікуємо помилку
     actual_err=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
     exit_code=$?
     expected_content="$(cat "$expected_err")"
