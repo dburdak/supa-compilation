@@ -11,5 +11,8 @@ statement ::= declaration | assignment
 
 operand ::= ident | number
 
-value ::= operand | ( operand ('+' | '-' | '*') operand )
+expr ::= term { ("+" | "-") term }
 
+term ::= factor { "*" factor }
+
+factor ::= number | ident

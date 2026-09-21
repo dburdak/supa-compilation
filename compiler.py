@@ -339,7 +339,7 @@ class Parser:
         name_tok = self.expect("ident", "variable name")
         self.expect("lbrace", "'{'")
 
-        init = self.parse_value(is_exit=False)
+        init = self.parse_expr()
 
         self.expect("rbrace", "'}'")
 
@@ -348,7 +348,7 @@ class Parser:
     def parse_assignment(self):
         var_tok = self.eat()  # ident
         self.expect("assignment", "':='")
-        value = self.parse_value(is_exit=False)
+        value = self.parse_expr()
         return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
 
     def parse_exit(self):
@@ -356,15 +356,40 @@ class Parser:
         val = self.parse_operand(is_exit=True)
         return ExitNode(exit_tok.line, exit_tok.col, val)
 
-    def parse_value(self, is_exit=False):
-        # value ::= operand [ op operand ]
-        left = self.parse_operand(is_exit)
-        tok = self.peek()
-        if tok is not None and tok.kind == "operator":
+    def parse_expr(self):
+        # expr ::= term { ("+" | "-") term }
+        node = self.parse_term()
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-":
             op_tok = self.eat()
-            right = self.parse_operand(is_exit)
-            return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right)
-        return left
+            # Будуємо лівоасоціативне дерево BinOpNode
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term())
+        return node
+
+    def parse_term(self):
+        # term ::= operand { "*" operand }
+        node = self.parse_operand()
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*":
+            op_tok = self.eat()
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
+        return node
+
+    def parse_operand(self, is_exit=False):
+        # operand ::= ident | number
+        tok = self.peek()
+        err_code = 7 if is_exit else 4
+
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_err(err_code, line, col)
+
+        if tok.kind == "ident":
+            self.eat()
+            return VarNode(tok.line, tok.col, tok.text)
+        elif tok.kind == "constant":
+            self.eat()
+            return ConstNode(tok.line, tok.col, tok.text)
+        else:
+            raise_err(err_code, tok.line, tok.col)
 
     def parse_operand(self, is_exit=False):
         # operand ::= ident | constant
