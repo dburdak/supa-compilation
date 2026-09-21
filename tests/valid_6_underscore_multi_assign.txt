@@ -1,0 +1,5 @@
+i32 _a1 { 5 }
+i32 mut y { _a1 + 10 }
+y := y * y
+y := y + _a1
+exit y

@@ -1,0 +1,4 @@
+
+  i32    space_var   {   100  }
+
+exit   space_var

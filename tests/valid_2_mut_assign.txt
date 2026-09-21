@@ -1,0 +1,3 @@
+i32 mut y { 5 }
+y := y * 2
+exit y
