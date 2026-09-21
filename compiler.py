@@ -6,6 +6,8 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument("source_path", help="path to the .txt file with your code")
 parser.add_argument("output_path", help="path to the .ll file, where compiler will place the intermediate code")
+parser.add_argument("--tokens", action="store_true",
+                    help="print the token stream to stdout")
 
 args = parser.parse_args()
 
@@ -292,4 +294,12 @@ if not has_exit:
 
 with open(args.output_path, "w") as out_f:
     out_f.write(str(module))
+
+    
+if args.tokens:
+    for line in lexer_lines:
+        for token in line:
+            token.print()
+            print(" ")
+        print("\n")
 
