@@ -1,0 +1,15 @@
+
+program ::= { statement } finish
+
+declaration ::= "i32" [ "mut" ] ident "{" value "}"
+
+assignment ::= ident ":=" value
+
+finish ::= "exit" operand
+
+statement ::= declaration | assignment
+
+operand ::= ident | number
+
+value ::= operand | ( operand ('+' | '-' | '*') operand )
+
