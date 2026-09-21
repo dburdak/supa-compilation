@@ -58,9 +58,14 @@ def raise_err(error_number, err_line, column, ue_part=""):
     }
 
     msg = ERRORS.get(error_number, "unknown compilation error")
-    if error_number in (10,11,12): msg += f" {ue_part}"
+    if error_number in (1, 2, 10, 11, 12) and ue_part:
+        msg += f" {ue_part}"
     sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n")
     sys.exit(error_number)
+
+def raise_syntax_err(line, col, msg):
+    sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
+    sys.exit(13)
 
 
 class Token:
@@ -169,6 +174,9 @@ class ProgramNode:
         if self.exit:
             self.exit.dump(indent + 2)
 
+    def accept(self, visitor):
+        return visitor.visit_program(self)
+
 
 class DeclNode:
     def __init__(self, line, col, name: str, mutable: bool, init):
@@ -178,6 +186,9 @@ class DeclNode:
         kind = "mut" if self.mutable else "const"
         print(" " * indent + f"Decl {self.name} {kind}")
         self.init.dump(indent + 2)
+    
+    def accept(self, visitor):
+        return visitor.visit_decl(self)
 
 
 class AssignNode:
@@ -187,6 +198,9 @@ class AssignNode:
     def dump(self, indent=0):
         print(" " * indent + f"Assign {self.name}")
         self.value.dump(indent + 2)
+    
+    def accept(self, visitor):
+        return visitor.visit_assign(self)
 
 
 class BinOpNode:
@@ -198,6 +212,9 @@ class BinOpNode:
         self.left.dump(indent + 2)
         self.right.dump(indent + 2)
 
+    def accept(self, visitor):
+        return visitor.visit_binop(self)
+
 
 class VarNode:
     def __init__(self, line, col, name):
@@ -205,6 +222,9 @@ class VarNode:
     
     def dump(self, indent=0):
         print(" " * indent + f"Var {self.name}")
+    
+    def accept(self, visitor):
+        return visitor.visit_var(self)
 
 
 class ConstNode:
@@ -214,6 +234,8 @@ class ConstNode:
     def dump(self, indent=0):
         print(" " * indent + f"Const {self.val}")
 
+    def accept(self, visitor):
+        return visitor.visit_const(self)
 
 class ExitNode:
     def __init__(self, line, col, val):
@@ -222,6 +244,9 @@ class ExitNode:
     def dump(self, indent=0):
         print(" " * indent + "Exit")
         self.val.dump(indent + 2)
+    
+    def accept(self, visitor):
+        return visitor.visit_exit(self)
 
 class Parser:
     def __init__(self, lines):
@@ -236,6 +261,15 @@ class Parser:
         tok = self.toks[self.pos]
         self.pos += 1
         return tok
+    
+    def expect(self, kind, what_expected):
+        tok = self.peek()
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, f"expected {what_expected}, found end of line")
+        if tok.kind != kind:
+            raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'")
+        return self.eat()
 
     def get_pos_info(self):
         tok = self.peek()
@@ -258,7 +292,7 @@ class Parser:
 
             if has_exit:
                 line, col = self.get_pos_info()
-                raise_err(6, line, col)
+                raise_err(6, line, col)  # Exit must be the last statement
 
             tok = self.peek()
             if tok.kind == "statement" and tok.text == "exit":
@@ -270,12 +304,11 @@ class Parser:
 
             if self.peek() is not None:
                 line, col = self.get_pos_info()
-                err_code = 7 if has_exit else 4
-                raise_err(err_code, line, col)
-
-        if not has_exit:
-            err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
-            raise_err(5, err_line, 1)
+                if has_exit:
+                    raise_err(7, line, col)  # Unparsable exit statement
+                else:
+                    leftover = self.peek()
+                    raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
 
         first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
         first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1)
@@ -285,14 +318,14 @@ class Parser:
         tok = self.peek()
         if tok is None:
             line, col = self.get_pos_info()
-            raise_err(4, line, col)
+            raise_syntax_err(line, col, "expected statement, found end of line")
 
         if tok.kind == "typename" and tok.text == "i32":
             return self.parse_decl()
         elif tok.kind == "ident":
             return self.parse_assignment()
         else:
-            raise_err(4, tok.line, tok.col)
+            raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'")
 
     def parse_decl(self):
         i32_tok = self.eat()  # "i32"
@@ -303,37 +336,18 @@ class Parser:
             self.eat()
             mutable = True
 
-        name_tok = self.peek()
-        if name_tok is None or name_tok.kind != "ident":
-            line, col = self.get_pos_info()
-            raise_err(4, line, col)
-        name_tok = self.eat()
-
-        lbrace_tok = self.peek()
-        if lbrace_tok is None or lbrace_tok.kind != "lbrace":
-            line, col = self.get_pos_info()
-            raise_err(4, line, col)
-        self.eat()
+        name_tok = self.expect("ident", "variable name")
+        self.expect("lbrace", "'{'")
 
         init = self.parse_value(is_exit=False)
 
-        rbrace_tok = self.peek()
-        if rbrace_tok is None or rbrace_tok.kind != "rbrace":
-            line, col = self.get_pos_info()
-            raise_err(4, line, col)
-        self.eat()
+        self.expect("rbrace", "'}'")
 
-        return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init)
+        return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init)
 
     def parse_assignment(self):
         var_tok = self.eat()  # ident
-
-        assign_tok = self.peek()
-        if assign_tok is None or assign_tok.kind != "assignment":
-            line, col = self.get_pos_info()
-            raise_err(4, line, col)
-        self.eat()
-
+        self.expect("assignment", "':='")
         value = self.parse_value(is_exit=False)
         return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
 
@@ -355,11 +369,13 @@ class Parser:
     def parse_operand(self, is_exit=False):
         # operand ::= ident | constant
         tok = self.peek()
-        err_code = 7 if is_exit else 4
 
         if tok is None:
             line, col = self.get_pos_info()
-            raise_err(err_code, line, col)
+            if is_exit:
+                raise_err(7, line, col)
+            else:
+                raise_syntax_err(line, col, "expected constant or variable, found end of line")
 
         if tok.kind == "ident":
             self.eat()
@@ -368,8 +384,78 @@ class Parser:
             self.eat()
             return ConstNode(tok.line, tok.col, tok.text)
         else:
-            raise_err(err_code, tok.line, tok.col)
-    
+            if is_exit:
+                raise_err(7, tok.line, tok.col)
+            else:
+                raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
+
+class CodeGenVisitor:
+    def __init__(self, builder, printf_func, fmt_global):
+        self.builder = builder
+        self.printf = printf_func
+        self.fmt_global = fmt_global
+        # Symbol table: name -> (alloca_ptr, is_mutable)
+        self.symbols = {}
+
+    def visit_program(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit:
+            node.exit.accept(self)
+        else:
+            err_line = node.stmts[-1].line if node.stmts else node.line
+            raise_err(5, err_line, 1)
+
+
+    def visit_decl(self, node):
+        if node.name in self.symbols:
+            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")  # redeclared variable
+        
+        init_val = node.init.accept(self)
+        ptr = self.builder.alloca(I32, name=node.name)
+        self.builder.store(init_val, ptr)
+        self.symbols[node.name] = (ptr, node.mutable)
+
+    def visit_assign(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")  # undeclared variable
+        
+        ptr, is_mutable = self.symbols[node.name]
+        if not is_mutable:
+            raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")  # cannot assign to const
+
+        val = node.value.accept(self)
+        self.builder.store(val, ptr)
+
+    def visit_exit(self, node):
+        val = node.val.accept(self)
+        # GEP to get pointer to format string
+        fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        self.builder.call(self.printf, [fmt_ptr, val])
+        self.builder.ret(ir.Constant(I32, 0))
+
+    def visit_binop(self, node):
+        left_val = node.left.accept(self)
+        right_val = node.right.accept(self)
+
+        if node.op == "+":
+            return self.builder.add(left_val, right_val)
+        elif node.op == "-":
+            return self.builder.sub(left_val, right_val)
+        elif node.op == "*":
+            return self.builder.mul(left_val, right_val)
+        else:
+            raise_err(8, node.line, node.col)  # unsupported operator
+
+    def visit_var(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")  # undeclared variable
+        
+        ptr, _ = self.symbols[node.name]
+        return self.builder.load(ptr, name=node.name)
+
+    def visit_const(self, node):
+        return ir.Constant(I32, int(node.val))
 
 
 with open(args.source_path, "rb") as f:
@@ -388,6 +474,10 @@ ast = parser_obj.parse_program()
 
 if args.ast:
     ast.dump()
+    sys.exit(0)
+
+codegen = CodeGenVisitor(builder, printf, fmt)
+ast.accept(codegen)
 
 if args.output_path:
     with open(args.output_path, "w") as out_f:

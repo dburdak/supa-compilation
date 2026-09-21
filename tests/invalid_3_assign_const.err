@@ -1,1 +1,1 @@
-compilation error: line 2:1: cannot assign to immutable variable x
+compilation error: line 2:1: cannot assign to immutable variable 'x'

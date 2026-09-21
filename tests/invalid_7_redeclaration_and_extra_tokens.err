@@ -1,1 +1,2 @@
-compilation error: line 2:5: redeclared variable
+compilation error: line 2:5: redeclared variable 'x'
+
