@@ -1,0 +1,1480 @@
+Запит на пояснення завдання
+https://gemini.google.com/app/89044e6d55076842
+
+User prompt: поясн мені ці два шляхи до вирішення завдання? TASK 3 — CODE GENERATION WALKS THE TREE (0.5 POINTS) In Practice 2 the checker called builder.alloca while it was still looking at tokens. Now nothing calls the builder until the whole tree stands; then one walk goes down it and emits the IR. Two shapes, pick one: • A visitor. A class CodeGen with one method per node kind — visit_program, visit_decl, visit_assign, visit_exit, visit_binop, visit_var, visit_const — and a method accept(visitor) on every node that calls the right one: BinOpNode.accept calls visitor.visit_binop(self). The nodes know nothing about IR; a second walk (a printer, a checker) is a second class. • A method per node. codegen(builder, symbols) on each node class; a node emits its own IR and asks its children for theirs. Shorter, and the IR lives inside the tree — fine for this week. Either way, statement nodes return nothing and expression nodes return the value the builder produced for them: visit_binop asks left and right for their values first, then emits add, sub or mul on the results — operands before the operation, bottom-up. visit_var is a load, visit_const is a constant, visit_decl is an alloca and a store of what init returned, visit_exit is the printf call and ret. The symbol table and the three checks — declared before use, declared once, mut before := — stay in this walk, exactly where they were; the error position now comes from the node, not from a token. 4 Nothing about the IR changes. The valid program of Practice 2 must still print Program exit with result 70, and your Practice 2 tests must still pass. That is the point: the next practices add a separate semantic pass, then if, then functions — each one is a new walk or a new node kind, and none of them touches the parser.
+Response: Головне завдання Task 3 — повністю відокремити генерацію коду (LLVM IR) від парсингу. Спочатку парсер повністю будує дерево AST (Task 2), а вже потім ви робите обхід (walk) цього дерева, щоб згенерувати IR.
+Завдання пропонує два шляхи для реалізації цього обходу:
+Шлях 1: Патерн «Відвідувач» (Visitor Pattern)
+Ідея: Вузли AST слугують виключно для збереження структури програми і взагалі «не знають» про LLVM IR. Уся логіка генерації коду виноситься в один окремий клас CodeGen.
+Як це працює:
+Кожен вузол AST отримує лише один простий метод accept(visitor):
+class BinOpNode:
+    def accept(self, visitor):
+        return visitor.visit_binop(self)
+
+
+Створюється окремий клас-генератор:
+class CodeGen:
+    def __init__(self, builder, symbols):
+        self.builder = builder
+        self.symbols = symbols
+
+    def visit_binop(self, node):
+        # Отримуємо значення лівого та правого операндів
+        left_val = node.left.accept(self)
+        right_val = node.right.accept(self)
+        # Генерація IR
+        return self.builder.add(left_val, right_val)
+
+
+Плюси: Дуже чиста архітектура (Single Responsibility Principle). Якщо в наступній практиці знадобиться зробити оптимізатор або семантичний аналізатор, ви просто створите клас SemanticChecker чи Optimizer, не змінюючи класи AST.
+Мінуси: Потрібно писати трохи більше коду («шаблонний» метод accept у кожному вузлі).
+Шлях 2: Метод у кожному класі (Method per Node)
+Ідея: Кожен вузол AST сам містить логіку генерації свого IR коду через метод codegen(builder, symbols).
+Як це працює:
+Метод codegen додається безпосередньо у кожен клас AST:
+class BinOpNode:
+    # ... init ...
+    def codegen(self, builder, symbols):
+        left_val = self.left.codegen(builder, symbols)
+        right_val = self.right.codegen(builder, symbols)
+        if self.op == "+":
+            return builder.add(left_val, right_val)
+        # ...
+
+
+Для запуску генерації коду ви просто викликаєте .codegen() у кореневого вузла ProgramNode:
+ast.codegen(builder, symbols)
+
+
+Плюси: Набагато простіше та швидше написати, менше файлів/класів.
+Мінуси: Логіка LLVM IR змішується зі структурою AST.
+Загальна логіка обходу (для обох шляхів)
+Незалежно від обраного шляху, обхід працює знизу вгору (bottom-up) для виразів:
+Вузли-вирази (BinOpNode, VarNode, ConstNode):
+Обов'язково повертають значення LLVM (ir.Value або ir.Constant).
+ConstNode повертає константу I32(val).
+VarNode генерує інструкцію builder.load() для змінної та повертає зчитане значення.
+BinOpNode спочатку обчислює ліву і праву частини, а потім генерує інструкцію add/sub/mul і повертає її результат.
+Вузли-стейтменти (DeclNode, AssignNode, ExitNode, ProgramNode):
+Нічого не повертають, а змінюють стан (генерують інструкції у builder).
+DeclNode обчислює початковий вираз init, робить builder.alloca() і записує значення через builder.store().
+ExitNode обчислює свій аргумент, викликає printf для виводу та робить builder.ret().
+Перевірка помилок:
+Таблиця символів та перевірки (чи оголошена змінна, чи вона mut при присвоєнні, чи немає дублікатів) виконуються під час цього ж обходу.
+Номери рядків та колонок для помилок тепер беруться безпосередньо з об'єктів вузлів AST (node.line, node.col).
+Що обрати?
+Якщо ваша мета — швидко та простіше зробити завдання, обирайте Шлях 2 (метод codegen у кожному вузлі).
+Якщо ви хочете зробити гнучку структуру на майбутні практики (де будуть додаватися if, функції та нові проходи аналізу), обирайте Шлях 1 (Visitor).
+
+User prompt: давай зробимо першим варіантом
+Response: Чудово! Для реалізації Першого варіанту (Visitor Pattern) ми додамо:
+Метод accept(self, visitor) у кожен клас AST-вузла.
+Окремий клас CodeGen (Visitor), який обходитиме дерево, вестиме таблицю символів, перевірятиме семантичні помилки та генеруватиме LLVM IR.
+Правильну ініціалізацію модулю LLVM IR та збереження результату у файл .ll.
+Ось повний готовий файл компілятора з реалізованим патерном Visitor:
+import argparse
+import sys
+from llvmlite import ir
+import llvmlite.binding as llvm
+
+# --- ARGPARSE SETUP ---
+parser = argparse.ArgumentParser()
+parser.add_argument("source_path", help="path to the .txt file with your code")
+parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file")
+parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout")
+parser.add_argument("--ast", action="store_true", help="print the AST tree and exit")
+
+args = parser.parse_args()
+
+# --- LLVM SETUP ---
+I32, I8 = ir.IntType(32), ir.IntType(8)
+
+module = ir.Module(name="compiler_module")
+module.triple = llvm.get_default_triple()
+
+main_type = ir.FunctionType(I32, [])
+main_func = ir.Function(module, main_type, name="main")
+entry_block = main_func.append_basic_block("entry")
+builder = ir.IRBuilder(entry_block)
+
+# printf declaration
+printf_type = ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True)
+printf = ir.Function(module, printf_type, name="printf")
+
+# Global format string for printf
+fmt_bytes = b"Program exit with result %d\n\0"
+fmt_type = ir.ArrayType(I8, len(fmt_bytes))
+fmt_global = ir.GlobalVariable(module, fmt_type, name="fmt")
+fmt_global.linkage = "private"
+fmt_global.global_constant = True
+fmt_global.initializer = ir.Constant(fmt_type, bytearray(fmt_bytes))
+
+KEYWORDS = {
+    "i32": "typename",
+    "mut": "specifier",
+    "exit": "statement",
+}
+
+
+def raise_err(error_number, err_line, column, ue_part=""):
+    ERRORS = {
+        1: "redeclared variable",
+        2: "undeclared variable",
+        3: "invalid variable name",
+        4: "unparsable statement",
+        5: "missing exit statement",
+        6: "exit must be the last statement",
+        7: "unparsable exit statement",
+        8: "unsupported operator",
+        9: "'{' is not closed before the end of the line",
+        10: "unexpected byte",
+        11: "unknown type",
+        12: "cannot assign to immutable variable"
+    }
+
+    msg = ERRORS.get(error_number, "unknown compilation error")
+    if error_number in (10, 11, 12):
+        msg += f" {ue_part}"
+    sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n")
+    sys.exit(error_number)
+
+
+# --- LEXER ---
+class Token:
+    def __init__(self, kind, text, line, col):
+        self.kind = kind
+        self.text = text
+        self.line = line
+        self.col = col
+
+    def to_str(self):
+        return f"({self.kind}, {self.text}, {self.line}, {self.col})"
+
+
+def is_alpha(b):
+    return (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_")
+
+def is_digit(b):
+    return ord("0") <= b <= ord("9")
+
+def is_operator(b):
+    return b in (ord("*"), ord("+"), ord("-"))
+
+
+def lex(data: bytes):
+    lexer_lines, tokens = [], []
+    state, start, line, col = "START", 0, 1, 1
+    open_brace_col = None
+    start_col = 1
+    i = 0
+    while i <= len(data):
+        b = data[i] if i < len(data) else None
+
+        if state == "START":
+            if b is None:
+                break
+            elif b in (32, 9):
+                pass
+            elif b == 10:
+                if open_brace_col is not None:
+                    raise_err(9, line, open_brace_col)
+                lexer_lines.append(tokens)
+                tokens = []
+                line += 1
+                col = 0
+            elif is_alpha(b):
+                state, start, start_col = "IDENT", i, col
+            elif is_digit(b):
+                state, start, start_col = "NUMBER", i, col
+            elif b == ord("{"):
+                tokens.append(Token("lbrace", "{", line, col))
+                open_brace_col = col
+            elif b == ord("}"):
+                tokens.append(Token("rbrace", "}", line, col))
+                open_brace_col = None
+            elif b == ord(":"):
+                state = "ASSIGN"
+                start_col = col
+            elif is_operator(b):
+                tokens.append(Token("operator", chr(b), line, col))
+            else:
+                raise_err(10, line, col, ue_part=chr(b))
+
+        elif state == "IDENT":
+            if b is not None and (is_alpha(b) or is_digit(b)):
+                pass
+            else:
+                word = data[start:i].decode()
+                tokens.append(Token(KEYWORDS.get(word, "ident"), word, line, start_col))
+                state = "START"
+                continue
+
+        elif state == "NUMBER":
+            if b is not None and is_digit(b):
+                pass
+            elif b is not None and is_alpha(b):
+                raise_err(10, line, col, ue_part=chr(b))
+            else:
+                num = data[start:i].decode()
+                tokens.append(Token("constant", num, line, start_col))
+                state = "START"
+                continue
+
+        elif state == "ASSIGN":
+            if b == ord("="):
+                tokens.append(Token("assignment", ":=", line, start_col))
+                state = "START"
+            else:
+                raise_err(10, line, col, ue_part=chr(b))
+
+        i += 1
+        col += 1
+
+    if tokens:
+        lexer_lines.append(tokens)
+    return lexer_lines
+
+
+# --- AST NODE CLASSES WITH VISITOR ACCEPT METHOD ---
+class ProgramNode:
+    def __init__(self, line, col, stmts, exit_node):
+        self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node
+
+    def accept(self, visitor):
+        return visitor.visit_program(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + "Program")
+        for stmt in self.stmts:
+            stmt.dump(indent + 2)
+        if self.exit:
+            self.exit.dump(indent + 2)
+
+
+class DeclNode:
+    def __init__(self, line, col, name: str, mutable: bool, init):
+        self.line, self.col, self.name, self.mutable, self.init = line, col, name, mutable, init
+
+    def accept(self, visitor):
+        return visitor.visit_decl(self)
+
+    def dump(self, indent=0):
+        kind = "mut" if self.mutable else "const"
+        print(" " * indent + f"Decl {self.name} {kind}")
+        self.init.dump(indent + 2)
+
+
+class AssignNode:
+    def __init__(self, line, col, name, value):
+        self.line, self.col, self.name, self.value = line, col, name, value
+
+    def accept(self, visitor):
+        return visitor.visit_assign(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Assign {self.name}")
+        self.value.dump(indent + 2)
+
+
+class BinOpNode:
+    def __init__(self, line, col, op, left, right):
+        self.line, self.col, self.op, self.left, self.right = line, col, op, left, right
+
+    def accept(self, visitor):
+        return visitor.visit_binop(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + f"BinOp {self.op}")
+        self.left.dump(indent + 2)
+        self.right.dump(indent + 2)
+
+
+class VarNode:
+    def __init__(self, line, col, name):
+        self.line, self.col, self.name = line, col, name
+
+    def accept(self, visitor):
+        return visitor.visit_var(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Var {self.name}")
+
+
+class ConstNode:
+    def __init__(self, line, col, val):
+        self.line, self.col, self.val = line, col, val
+
+    def accept(self, visitor):
+        return visitor.visit_const(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Const {self.val}")
+
+
+class ExitNode:
+    def __init__(self, line, col, val):
+        self.line, self.col, self.val = line, col, val
+
+    def accept(self, visitor):
+        return visitor.visit_exit(self)
+
+    def dump(self, indent=0):
+        print(" " * indent + "Exit")
+        self.val.dump(indent + 2)
+
+
+# --- PARSER ---
+class Parser:
+    def __init__(self, lines):
+        self.lines = lines
+        self.toks = []
+        self.pos = 0
+
+    def peek(self):
+        return self.toks[self.pos] if self.pos < len(self.toks) else None
+
+    def eat(self):
+        tok = self.toks[self.pos]
+        self.pos += 1
+        return tok
+
+    def get_pos_info(self):
+        tok = self.peek()
+        if tok:
+            return tok.line, tok.col
+        if self.toks:
+            last = self.toks[-1]
+            return last.line, last.col + len(last.text)
+        return 1, 1
+
+    def parse_program(self):
+        stmts = []
+        exit_node = None
+        has_exit = False
+
+        for line_toks in self.lines:
+            if not line_toks:
+                continue
+            self.toks, self.pos = line_toks, 0
+
+            if has_exit:
+                line, col = self.get_pos_info()
+                raise_err(6, line, col)
+
+            tok = self.peek()
+            if tok.kind == "statement" and tok.text == "exit":
+                exit_node = self.parse_exit()
+                has_exit = True
+            else:
+                stmt_node = self.parse_statement()
+                stmts.append(stmt_node)
+
+            if self.peek() is not None:
+                line, col = self.get_pos_info()
+                err_code = 7 if has_exit else 4
+                raise_err(err_code, line, col)
+
+        if not has_exit:
+            err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
+            raise_err(5, err_line, 1)
+
+        first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
+        first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1)
+        return ProgramNode(first_line, first_col, stmts, exit_node)
+
+    def parse_statement(self):
+        tok = self.peek()
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+
+        if tok.kind == "typename" and tok.text == "i32":
+            return self.parse_decl()
+        elif tok.kind == "ident":
+            return self.parse_assignment()
+        else:
+            raise_err(4, tok.line, tok.col)
+
+    def parse_decl(self):
+        i32_tok = self.eat()
+        mutable = False
+
+        tok = self.peek()
+        if tok is not None and tok.kind == "specifier" and tok.text == "mut":
+            self.eat()
+            mutable = True
+
+        name_tok = self.peek()
+        if name_tok is None or name_tok.kind != "ident":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        name_tok = self.eat()
+
+        lbrace_tok = self.peek()
+        if lbrace_tok is None or lbrace_tok.kind != "lbrace":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        init = self.parse_value(is_exit=False)
+
+        rbrace_tok = self.peek()
+        if rbrace_tok is None or rbrace_tok.kind != "rbrace":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init)
+
+    def parse_assignment(self):
+        var_tok = self.eat()
+
+        assign_tok = self.peek()
+        if assign_tok is None or assign_tok.kind != "assignment":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        value = self.parse_value(is_exit=False)
+        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+
+    def parse_exit(self):
+        exit_tok = self.eat()
+        val = self.parse_operand(is_exit=True)
+        return ExitNode(exit_tok.line, exit_tok.col, val)
+
+    def parse_value(self, is_exit=False):
+        left = self.parse_operand(is_exit)
+        tok = self.peek()
+        if tok is not None and tok.kind == "operator":
+            op_tok = self.eat()
+            right = self.parse_operand(is_exit)
+            return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right)
+        return left
+
+    def parse_operand(self, is_exit=False):
+        tok = self.peek()
+        err_code = 7 if is_exit else 4
+
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_err(err_code, line, col)
+
+        if tok.kind == "ident":
+            self.eat()
+            return VarNode(tok.line, tok.col, tok.text)
+        elif tok.kind == "constant":
+            self.eat()
+            return ConstNode(tok.line, tok.col, tok.text)
+        else:
+            raise_err(err_code, tok.line, tok.col)
+
+
+# --- CODE GENERATION VISITOR (TASK 3) ---
+class CodeGenVisitor:
+    def __init__(self, builder, printf_func, fmt_global):
+        self.builder = builder
+        self.printf = printf_func
+        self.fmt_global = fmt_global
+        # Symbol table: name -> (alloca_ptr, is_mutable)
+        self.symbols = {}
+
+    def visit_program(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit:
+            node.exit.accept(self)
+
+    def visit_decl(self, node):
+        if node.name in self.symbols:
+            raise_err(1, node.line, node.col)  # redeclared variable
+        
+        init_val = node.init.accept(self)
+        ptr = self.builder.alloca(I32, name=node.name)
+        self.builder.store(init_val, ptr)
+        self.symbols[node.name] = (ptr, node.mutable)
+
+    def visit_assign(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col)  # undeclared variable
+        
+        ptr, is_mutable = self.symbols[node.name]
+        if not is_mutable:
+            raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")  # cannot assign to const
+
+        val = node.value.accept(self)
+        self.builder.store(val, ptr)
+
+    def visit_exit(self, node):
+        val = node.val.accept(self)
+        # GEP to get pointer to format string
+        fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        self.builder.call(self.printf, [fmt_ptr, val])
+        self.builder.ret(ir.Constant(I32, 0))
+
+    def visit_binop(self, node):
+        left_val = node.left.accept(self)
+        right_val = node.right.accept(self)
+
+        if node.op == "+":
+            return self.builder.add(left_val, right_val)
+        elif node.op == "-":
+            return self.builder.sub(left_val, right_val)
+        elif node.op == "*":
+            return self.builder.mul(left_val, right_val)
+        else:
+            raise_err(8, node.line, node.col)  # unsupported operator
+
+    def visit_var(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col)  # undeclared variable
+        
+        ptr, _ = self.symbols[node.name]
+        return self.builder.load(ptr, name=node.name)
+
+    def visit_const(self, node):
+        return ir.Constant(I32, int(node.val))
+
+
+# --- EXECUTION FLOW ---
+with open(args.source_path, "rb") as f:
+    file_bytes = f.read()
+
+lines = lex(file_bytes)
+
+if args.tokens:
+    for line in lines:
+        for token in line:
+            print(token.to_str() + " ")
+        print()
+
+parser_obj = Parser(lines)
+ast = parser_obj.parse_program()
+
+if args.ast:
+    ast.dump()
+    sys.exit(0)  # Друк AST і завершення
+
+# Запуск генератора коду через Visitor
+codegen = CodeGenVisitor(builder, printf, fmt_global)
+ast.accept(codegen)
+
+# Запис згенерованого LLVM IR у файл
+if args.output_path:
+    with open(args.output_path, "w") as out_f:
+        out_f.write(str(module))
+
+
+Що змінилося та як це працює:
+accept(self, visitor) у кожному вузлі: Тепер кожен вузол передає себе відповідному методу відвідувача (наприклад, BinOpNode викликає visitor.visit_binop(self)).
+Клас CodeGenVisitor:
+visit_decl: обчислює початкове значення, виділяє пам'ять через builder.alloca(), додає зміну в symbols та перевіряє на повторне оголошення (Помилка 1).
+visit_assign: шукає змінну в symbols, перевіряє, чи вона є мутабельною (Помилка 12 та Помилка 2), і обчислює/записує нове значення.
+visit_var: генерує інструкцію builder.load() для завантаження значення з пам'яті.
+visit_exit: генерує printf з результатом та завершальну інструкцію builder.ret(0).
+Корректне завершення програми: При передачі прапорця --ast додано sys.exit(0), щоб генерація коду не запускалася та не перезаписувала .ll файл.
+
+User prompt: поясни мені що це за методи accept(visitor) навіщо вони потрібні
+Response: Метод accept(visitor) — це «перехідний місток» або переадресатор між вузлом синтаксичного дерева (AST) і класом, який обробляє це дерево (CodeGenVisitor).
+У програмуванні цей підхід називається подвійною диспетчеризацією (Double Dispatch).
+Навіщо він потрібен і яку проблему вирішує?
+Уявіть, що у вас є дерево об'єктів різних типів: DeclNode, AssignNode, BinOpNode, VarNode. Вам потрібно обійти це дерево і для кожного типу виконати відповідну дію.
+Без методу accept у вас було б два шляхи, і обидва погані:
+Некрасивий шлях через if isinstance(...): Вам довелося б у генераторі коду писати купу перевірок типів:
+def generate(node):
+    if isinstance(node, DeclNode):
+        # логіка для оголошення
+    elif isinstance(node, AssignNode):
+        # логіка для присвоєння
+    elif isinstance(node, BinOpNode):
+        # логіка для операцій
+
+Мінуси: Це повільно, виглядає громіздко і легко забути якийсь тип вузла.
+Шлях забруднення класи AST кодом LLVM: Ви могли б написати генерацію коду прямо всередині класів AST (це Шлях 2 з попереднього питання). Мінуси: Ваші класи AST перестають бути просто «деревом даних». Вони стають прив'язаними до LLVM IR. Якщо в наступній практиці вам треба буде зробити перевірку типів або оптимізатор, доведеться додавати нові й нові методи в усі класи AST.
+Як працює accept(visitor)?
+Завдяки accept, вузол дерева сам «повідомляє» відвідувачу (visitor), хто він такий:
+class BinOpNode:
+    def accept(self, visitor):
+        return visitor.visit_binop(self)  # Вузол каже: "Я бінарна операція, виклич для мене visit_binop!"
+
+
+Ви викликаєте: ast.accept(codegen)
+Об'єкт ProgramNode отримує ваш codegen і викликає у нього: visitor.visit_program(self)
+Усередині visit_program ви берете дочірні вузли і знову викликаєте для них .accept(self)
+Об'єкт BinOpNode отримує той самий visitor і викликає у нього вже метод: visitor.visit_binop(self)
+Вузол сам підставляє потрібне ім'я методу (visit_decl, visit_binop, visit_var), позбавляючи вас потреби писати перевірки if isinstance(...).
+Головні переваги цього підходу:
+Чистота коду (Separation of Concerns): Класи AST (DeclNode, VarNode тощо) відповідають тільки за збереження структури програми. Вони навіть не знають, що таке LLVM IR.
+Супер-легке розширення компілятора: Якщо завтра ви захочете додати оптимізатор коду або семантичний аналізатор, вам не потрібно змінювати жодного рядка в AST-класах. Ви просто створюєте новий клас TypeCheckerVisitor або OptimizerVisitor і реалізуєте в ньому ті самі методи visit_*.
+
+User prompt: тут в парсері неправильно використана функція raise_err не з тими кодами, всюди пише 4 код, хоча випадки різні, чому?: class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() err_code = 7 if has_exit else 4 raise_err(err_code, line, col) if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_err(4, line, col) if tok.kind == "typename" and tok.text == "i32": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_err(4, tok.line, tok.col) def parse_decl(self): i32_tok = self.eat() # "i32" mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.peek() if name_tok is None or name_tok.kind != "ident": line, col = self.get_pos_info() raise_err(4, line, col) name_tok = self.eat() lbrace_tok = self.peek() if lbrace_tok is None or lbrace_tok.kind != "lbrace": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() init = self.parse_value(is_exit=False) rbrace_tok = self.peek() if rbrace_tok is None or rbrace_tok.kind != "rbrace": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident assign_tok = self.peek() if assign_tok is None or assign_tok.kind != "assignment": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() value = self.parse_value(is_exit=False) return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_value(self, is_exit=False): # value ::= operand [ op operand ] left = self.parse_operand(is_exit) tok = self.peek() if tok is not None and tok.kind == "operator": op_tok = self.eat() right = self.parse_operand(is_exit) return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right) return left def parse_operand(self, is_exit=False): # operand ::= ident | constant tok = self.peek() err_code = 7 if is_exit else 4 if tok is None: line, col = self.get_pos_info() raise_err(err_code, line, col) if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) else: raise_err(err_code, tok.line, tok.col)
+Response: Код 4 ("unparsable statement") використано всюди через те, що у вашій реалізації залишилася спрощена система помилок з фіксованим словником (ERRORS = {1: ..., 4: ...}). Оскільки в цій системі під номером 4 записано загальну фразу «неможливо розібрати інструкцію», її підставили під усі синтаксичні помилки парсера.
+Чому це вважається помилкою для Task 2?
+Вимоги Task 2 (Errors the parser reports) чітко вказують, що парсер повинен повертати конкретні, деталізовані повідомлення про те, що саме пішло не так, а не універсальну фразу:
+Відсутність :=: має бути expected ':=' after 'x', got '5' (а зараз видає unparsable statement).
+Відсутність {}: має бути variable 'x' needs an initialiser in {}.
+Неочікуваний знак на початку: cannot start a statement with '+'.
+Рядок закінчився раніше часу: expected a constant or a variable, found end of line.
+Як це виправляти за методичкою?
+Замість єдиної функції raise_err(4, ...) із жорстким числоим кодом, у методичці пропонується використовувати метод expect() та генерувати текстове повідомлення динамічно залежно від того, де зупинився peek():
+1. Нова функція генерації синтаксичної помилки
+def raise_syntax_err(line, col, msg):
+    sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")[cite: 1]
+    sys.exit(1) # Будь-який ненульовий код[cite: 1]
+
+
+2. Метод expect у класі Parser (із скелета у методичці)
+def expect(self, kind, what_expected):
+    tok = self.peek()
+    if tok is None:
+        line, col = self.get_pos_info()
+        raise_syntax_err(line, col, f"expected {what_expected}, found end of line")
+    if tok.kind != kind:
+        raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'")
+    return self.eat()
+
+
+Порівняння: Як стає код parse_decl
+Було (використання коду 4):
+lbrace_tok = self.peek()
+if lbrace_tok is None or lbrace_tok.kind != "lbrace":
+    line, col = self.get_pos_info()
+    raise_err(4, line, col) # -> compilation error: line 1:5: unparsable statement
+self.eat()
+
+
+Стає (за вимогами Task 2):
+# expect() сам перевірить токен, з'їсть його або підніме точну помилку
+self.expect("lbrace", "'{'") 
+# -> compilation error: line 1:5: expected '{', got '5'
+
+
+
+User prompt: тепер заміни виклики функції raise_err в парсері: class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() err_code = 7 if has_exit else 4 raise_err(err_code, line, col) if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_err(4, line, col) if tok.kind == "typename" and tok.text == "i32": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_err(4, tok.line, tok.col) def parse_decl(self): i32_tok = self.eat() # "i32" mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.peek() if name_tok is None or name_tok.kind != "ident": line, col = self.get_pos_info() raise_err(4, line, col) name_tok = self.eat() lbrace_tok = self.peek() if lbrace_tok is None or lbrace_tok.kind != "lbrace": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() init = self.parse_value(is_exit=False) rbrace_tok = self.peek() if rbrace_tok is None or rbrace_tok.kind != "rbrace": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident assign_tok = self.peek() if assign_tok is None or assign_tok.kind != "assignment": line, col = self.get_pos_info() raise_err(4, line, col) self.eat() value = self.parse_value(is_exit=False) return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_value(self, is_exit=False): # value ::= operand [ op operand ] left = self.parse_operand(is_exit) tok = self.peek() if tok is not None and tok.kind == "operator": op_tok = self.eat() right = self.parse_operand(is_exit) return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right) return left def parse_operand(self, is_exit=False): # operand ::= ident | constant tok = self.peek() err_code = 7 if is_exit else 4 if tok is None: line, col = self.get_pos_info() raise_err(err_code, line, col) if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) else: raise_err(err_code, tok.line, tok.col)
+Response: Ось оновлений клас Parser, у якому всі сліпі виклики raise_err(4, ...) замінені на виклики self.expect(...) та информативні помилки через raise_syntax_err(...).
+При цьому спеціальні коди помилок для exit (5 — missing exit, 6 — exit must be last, 7 — unparsable exit) збережені відповідно до специфікації.
+def raise_syntax_err(line, col, msg):
+    sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
+    sys.exit(1)
+
+
+class Parser:
+    def __init__(self, lines):
+        self.lines = lines
+        self.toks = []
+        self.pos = 0
+
+    def peek(self):
+        return self.toks[self.pos] if self.pos < len(self.toks) else None
+
+    def eat(self):
+        tok = self.toks[self.pos]
+        self.pos += 1
+        return tok
+
+    def get_pos_info(self):
+        tok = self.peek()
+        if tok:
+            return tok.line, tok.col
+        if self.toks:
+            last = self.toks[-1]
+            return last.line, last.col + len(last.text)
+        return 1, 1
+
+    def expect(self, kind, what_expected):
+        tok = self.peek()
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, f"expected {what_expected}, found end of line")
+        if tok.kind != kind:
+            raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'")
+        return self.eat()
+
+    def parse_program(self):
+        stmts = []
+        exit_node = None
+        has_exit = False
+
+        for line_toks in self.lines:
+            if not line_toks:
+                continue
+            self.toks, self.pos = line_toks, 0
+
+            if has_exit:
+                line, col = self.get_pos_info()
+                raise_err(6, line, col)  # Exit must be the last statement
+
+            tok = self.peek()
+            if tok.kind == "statement" and tok.text == "exit":
+                exit_node = self.parse_exit()
+                has_exit = True
+            else:
+                stmt_node = self.parse_statement()
+                stmts.append(stmt_node)
+
+            if self.peek() is not None:
+                line, col = self.get_pos_info()
+                if has_exit:
+                    raise_err(7, line, col)  # Unparsable exit statement
+                else:
+                    leftover = self.peek()
+                    raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
+
+        if not has_exit:
+            err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
+            raise_err(5, err_line, 1)  # Missing exit statement
+
+        first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
+        first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1)
+        return ProgramNode(first_line, first_col, stmts, exit_node)
+
+    def parse_statement(self):
+        tok = self.peek()
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, "expected statement, found end of line")
+
+        if tok.kind == "typename" and tok.text == "i32":
+            return self.parse_decl()
+        elif tok.kind == "ident":
+            return self.parse_assignment()
+        else:
+            raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'")
+
+    def parse_decl(self):
+        i32_tok = self.eat()  # "i32"
+        mutable = False
+
+        tok = self.peek()
+        if tok is not None and tok.kind == "specifier" and tok.text == "mut":
+            self.eat()
+            mutable = True
+
+        name_tok = self.expect("ident", "variable name")
+        self.expect("lbrace", "'{'")
+
+        init = self.parse_value(is_exit=False)
+
+        self.expect("rbrace", "'}'")
+
+        return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init)
+
+    def parse_assignment(self):
+        var_tok = self.eat()  # ident
+        self.expect("assignment", "':='")
+        value = self.parse_value(is_exit=False)
+        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+
+    def parse_exit(self):
+        exit_tok = self.eat()  # "exit"
+        val = self.parse_operand(is_exit=True)
+        return ExitNode(exit_tok.line, exit_tok.col, val)
+
+    def parse_value(self, is_exit=False):
+        # value ::= operand [ op operand ]
+        left = self.parse_operand(is_exit)
+        tok = self.peek()
+        if tok is not None and tok.kind == "operator":
+            op_tok = self.eat()
+            right = self.parse_operand(is_exit)
+            return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right)
+        return left
+
+    def parse_operand(self, is_exit=False):
+        # operand ::= ident | constant
+        tok = self.peek()
+
+        if tok is None:
+            line, col = self.get_pos_info()
+            if is_exit:
+                raise_err(7, line, col)
+            else:
+                raise_syntax_err(line, col, "expected constant or variable, found end of line")
+
+        if tok.kind == "ident":
+            self.eat()
+            return VarNode(tok.line, tok.col, tok.text)
+        elif tok.kind == "constant":
+            self.eat()
+            return ConstNode(tok.line, tok.col, tok.text)
+        else:
+            if is_exit:
+                raise_err(7, tok.line, tok.col)
+            else:
+                raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
+
+
+Основні зміни:
+Метод parse_decl: Ручні перевірки токенів для назви змінної, { та } замінені трьома лаконічними викликами self.expect(...).
+Метод parse_assignment: Очікування оператора := винесено в self.expect("assignment", "':='").
+Зручні повідомлення про помилки: Якщо замість оператора чи дужки передано інший токен, виводиться точно: expected '{', got '5' або expected variable name, found end of line.
+Розмежування помилок: Спеціальні коди 5, 6, 7 залишено для exit, а синтаксичні помилки парсингу формують динамічні звітні повідомлення.
+
+User prompt: ти бачиш що тут неправильно викликається функція помилки? def visit_decl(self, node): if node.name in self.symbols: raise_err(1, node.line, node.col) якщо так то чому неправильно, чи є ще подібні помилки в коді: from llvmlite import ir import llvmlite.binding as llvm import argparse import sys parser = argparse.ArgumentParser() parser.add_argument("source_path", help="path to the .txt file with your code") parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file") parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout") parser.add_argument("--ast", action="store_true", help="print the AST tree and exit") args = parser.parse_args() I32, I8 = ir.IntType(32), ir.IntType(8) module = ir.Module(name="practice1") module.triple = llvm.get_default_triple() main = ir.Function(module, ir.FunctionType(I32, []), name="main") entry_block = main.append_basic_block("entry") builder = ir.IRBuilder(entry_block) printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf") # declaration only text = b"Program exit with result %d\n\0" fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt") fmt.linkage, fmt.global_constant = "private", True fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text)) TYPES = { "i32": I32, } KEYWORDS = { "i32": "typename", "mut": "specifier", "exit": "statement", } OPERATORS = { "+": builder.add, "-": builder.sub, "*": builder.mul, } def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable" } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (10,11,12): msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13) class Token: def __init__(self, kind, text, line, col): self.kind = kind self.text = text self.line = line self.col = col def to_str(self): return f"({self.kind}, {self.text}, {self.line}, {self.col})" def is_alpha(b): if (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_"): return True return False def is_digit(b): if ord("0") <= b <= ord("9"): return True return False def is_operator(b): if ord("*") == b or ord("+") == b or ord("-") == b: return True return False def lex(data: bytes): lexer_lines, tokens = [], [] state, start, line, col = "START", 0, 1, 1 open_brace_col = None start_col = 1 i = 0 while i <= len(data): # one extra step: the end of input b = data[i] if i < len(data) else None if state == "START": if b is None: break elif b in (32, 9): pass # space, tab elif b == 10: # new line if open_brace_col is not None: raise_err(9, line, open_brace_col) lexer_lines.append(tokens) tokens = [] line += 1; col = 0 elif is_alpha(b): state, start, start_col = "IDENT", i, col elif is_digit(b): state, start, start_col = "NUMBER", i, col elif b == ord("{"): tokens.append(Token("lbrace","{", line, col)) open_brace_col = col elif b == ord("}"): tokens.append(Token("rbrace", "}", line, col)) open_brace_col = None elif b == ord(":"): state = "ASSIGN" start_col = col elif is_operator(b): tokens.append(Token("operator", chr(b), line, col)) else: raise_err(10, line, col, ue_part = chr(b)) elif state == "IDENT": if b is not None and (is_alpha(b) or is_digit(b)): pass else: word = data[start:i] tokens.append(Token(KEYWORDS.get(word.decode(), "ident"), word.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "NUMBER": if b is not None and is_digit(b): pass#braces elif b is not None and is_alpha(b): raise_err(10, line, col, ue_part = chr(b)) else: num = data[start:i] tokens.append(Token(KEYWORDS.get(num.decode(), "constant"), num.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "ASSIGN": if b == ord("="): tokens.append(Token("assignment", ":=", line, start_col)) state = "START" else: raise_err(10, line, col, ue_part = chr(b)) i += 1; col += 1 if tokens: lexer_lines.append(tokens) return lexer_lines class ProgramNode: def __init__(self, line, col, stmts, exit_node): self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node def dump(self, indent=0): print(" " * indent + "Program") for stmt in self.stmts: stmt.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_program(self) class DeclNode: def __init__(self, line, col, name: str, mutable: bool, init): self.line, self.col, self.name, self.mutable, self.init = line, col, name, mutable, init def dump(self, indent=0): kind = "mut" if self.mutable else "const" print(" " * indent + f"Decl {self.name} {kind}") self.init.dump(indent + 2) def accept(self, visitor): return visitor.visit_decl(self) class AssignNode: def __init__(self, line, col, name, value): self.line, self.col, self.name, self.value = line, col, name, value def dump(self, indent=0): print(" " * indent + f"Assign {self.name}") self.value.dump(indent + 2) def accept(self, visitor): return visitor.visit_assign(self) class BinOpNode: def __init__(self, line, col, op, left, right): self.line, self.col, self.op, self.left, self.right = line, col, op, left, right def dump(self, indent=0): print(" " * indent + f"BinOp {self.op}") self.left.dump(indent + 2) self.right.dump(indent + 2) def accept(self, visitor): return visitor.visit_binop(self) class VarNode: def __init__(self, line, col, name): self.line, self.col, self.name = line, col, name def dump(self, indent=0): print(" " * indent + f"Var {self.name}") def accept(self, visitor): return visitor.visit_var(self) class ConstNode: def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Const {self.val}") def accept(self, visitor): return visitor.visit_const(self) class ExitNode: def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + "Exit") self.val.dump(indent + 2) def accept(self, visitor): return visitor.visit_exit(self) class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) # Exit must be the last statement tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() if has_exit: raise_err(7, line, col) # Unparsable exit statement else: leftover = self.peek() raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement") if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) # Missing exit statement first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, "expected statement, found end of line") if tok.kind == "typename" and tok.text == "i32": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'") def parse_decl(self): i32_tok = self.eat() # "i32" mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.expect("ident", "variable name") self.expect("lbrace", "'{'") init = self.parse_value(is_exit=False) self.expect("rbrace", "'}'") return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident self.expect("assignment", "':='") value = self.parse_value(is_exit=False) return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_value(self, is_exit=False): # value ::= operand [ op operand ] left = self.parse_operand(is_exit) tok = self.peek() if tok is not None and tok.kind == "operator": op_tok = self.eat() right = self.parse_operand(is_exit) return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right) return left def parse_operand(self, is_exit=False): # operand ::= ident | constant tok = self.peek() if tok is None: line, col = self.get_pos_info() if is_exit: raise_err(7, line, col) else: raise_syntax_err(line, col, "expected constant or variable, found end of line") if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) else: if is_exit: raise_err(7, tok.line, tok.col) else: raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'") class CodeGenVisitor: def __init__(self, builder, printf_func, fmt_global): self.builder = builder self.printf = printf_func self.fmt_global = fmt_global # Symbol table: name -> (alloca_ptr, is_mutable) self.symbols = {} def visit_program(self, node): for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) def visit_decl(self, node): if node.name in self.symbols: raise_err(1, node.line, node.col) # redeclared variable init_val = node.init.accept(self) ptr = self.builder.alloca(I32, name=node.name) self.builder.store(init_val, ptr) self.symbols[node.name] = (ptr, node.mutable) def visit_assign(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col) # undeclared variable ptr, is_mutable = self.symbols[node.name] if not is_mutable: raise_err(12, node.line, node.col, ue_part=f"{node.name}") # cannot assign to const val = node.value.accept(self) self.builder.store(val, ptr) def visit_exit(self, node): val = node.val.accept(self) # GEP to get pointer to format string fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, val]) self.builder.ret(ir.Constant(I32, 0)) def visit_binop(self, node): left_val = node.left.accept(self) right_val = node.right.accept(self) if node.op == "+": return self.builder.add(left_val, right_val) elif node.op == "-": return self.builder.sub(left_val, right_val) elif node.op == "*": return self.builder.mul(left_val, right_val) else: raise_err(8, node.line, node.col) # unsupported operator def visit_var(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col) # undeclared variable ptr, _ = self.symbols[node.name] return self.builder.load(ptr, name=node.name) def visit_const(self, node): return ir.Constant(I32, int(node.val)) with open(args.source_path, "rb") as f: file_bytes = f.read() lines = lex(file_bytes) if args.tokens: for line in lines: for token in line: print(token.to_str() + " ") print() parser_obj = Parser(lines) ast = parser_obj.parse_program() if args.ast: ast.dump() sys.exit(0) codegen = CodeGenVisitor(builder, printf, fmt) ast.accept(codegen) if args.output_path: with open(args.output_path, "w") as out_f: out_f.write(str(module))
+Response: У фрагменті visit_decl:
+def visit_decl(self, node):
+    if node.name in self.symbols:
+        raise_err(1, node.line, node.col)
+
+
+Так, ця функція викликана неправильно.
+1. Чому виклики raise_err у visit_decl та visit_var містять помилку?
+Згідно з описом функції raise_err:
+def raise_err(error_number, err_line, column, ue_part=""):
+    ERRORS = {
+        1: "redeclared variable",
+        2: "undeclared variable",
+        ...
+    }
+    msg = ERRORS.get(error_number, "unknown compilation error")
+    if error_number in (10, 11, 12):
+        msg += f" {ue_part}"
+    ...
+
+
+Для помилок №1 (redeclared variable), №2 (undeclared variable) та №12 (cannot assign to immutable variable) за вимогами специфікацій компіляторів (і за аналогією до помилки №12) у кінці повідомлення має виводитися назва змінної (ue_part).
+Однак у вашому коді умова форматування виглядає так:
+if error_number in (10, 11, 12):
+    msg += f" {ue_part}"
+
+
+У результаті:
+Якщо ви викликаєте raise_err(1, node.line, node.col), параметр ue_part не передається взагалі, і ім'я повторно оголошеної змінної в повідомлення про помилку не потрапляє.
+Якщо ви викликаєте raise_err(2, node.line, node.col) у visit_var або visit_assign, ім'я невизначеної змінної також втрачається.
+Правильний виклик для visit_decl:
+raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
+
+
+А в самій raise_err номери 1 та 2 мають бути додані до кортежу (1, 2, 10, 11, 12).
+2. Інші подібні помилки та проблемні місця в коді
+В наданому коді є ще кілька критичних помилок і невідповідностей у роботі лексера та візитора.
+Помилка А: Невизначений параметр ue_part у лексері (Lexer Crashes)
+У двох місцях лексера передається параметр з о Druку (ue_part = ... замість ue_part=... або використання chr(b) для b is None):
+Строка 128 (стан START):
+else:
+    raise_err(10, line, col, ue_part = chr(b))
+
+Якщо b дорівнює None (кінець файлу), chr(None) викличе TypeError: an integer is required замість коректного завершення роботи чи виводу помилки.
+Строка 136 (стан NUMBER):
+elif b is not None and is_alpha(b):
+    raise_err(10, line, col, ue_part = chr(b))
+
+Якщо після цифр іде буква (наприклад 123a), буде викликано помилку №10 («unexpected byte»), але за специфікацією це помилка №3 — "invalid variable name" або синтаксична помилка парсингу числових літералів/ідентифікаторів.
+Помилка Б: Відсутність додавання назви змінної у visit_var (Помилка №2)
+У visit_var:
+def visit_var(self, node):
+    if node.name not in self.symbols:
+        raise_err(2, node.line, node.col)  # <--- Втрачено ue_part
+
+
+Має бути:
+raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+
+
+Помилка В: Помилка обробки від'ємних чисел та нулів у лексері
+У лексері цифри зчитуються як NUMBER, але знак - завжди обробляється як оператор operator у стані START:
+elif is_operator(b):
+    tokens.append(Token("operator", chr(b), line, col))
+
+
+Якщо в коді написана константа виду -5, лексер створить два токени: operator("-") та constant("5"). Парсер очікує лише operand ::= ident | constant і не вміє парсити унарний мінус. Відповідно, вираз з від'ємним числом впаде з помилкою парсингу.
+Помилка Г: Залишкові виклики raise_err(4, ...) замість raise_syntax_err у парсері
+Хоча ви оновили Parser, у функції parse_program залишилися рядки:
+if self.peek() is not None:
+    line, col = self.get_pos_info()
+    if has_exit:
+        raise_err(7, line, col)
+
+
+Якщо після exit ідуть інші токени, викликається код 7 (unparsable exit statement). Але якщо в середині програми є зайві токени після оператора, викликається raise_syntax_err, що створює невідповідність кодам повернення (exit(7) проти exit(13) для raise_syntax_err).
+Як виправити функцію raise_err та виклики у CodeGenVisitor:
+Оновіть raise_err:
+def raise_err(error_number, err_line, column, ue_part=""):
+    ERRORS = {
+        1: "redeclared variable",
+        2: "undeclared variable",
+        3: "invalid variable name",
+        4: "unparsable statement",
+        5: "missing exit statement",
+        6: "exit must be the last statement",
+        7: "unparsable exit statement",
+        8: "unsupported operator",
+        9: "'{' is not closed before the end of the line",
+        10: "unexpected byte",
+        11: "unknown type",
+        12: "cannot assign to immutable variable"
+    }
+
+    msg = ERRORS.get(error_number, "unknown compilation error")
+    if error_number in (1, 2, 10, 11, 12) and ue_part:
+        msg += f" {ue_part}"
+    sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n")
+    sys.exit(error_number)
+
+
+Оновіть виклики у CodeGenVisitor:
+def visit_decl(self, node):
+    if node.name in self.symbols:
+        raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
+    ...
+
+def visit_assign(self, node):
+    if node.name not in self.symbols:
+        raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+    ...
+
+def visit_var(self, node):
+    if node.name not in self.symbols:
+        raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+    ...
+
+
+
+User prompt: а також неправильна позиція в цьому конкретному місці та пошукай ще чи є десь в коді подібне, що викликано для позиції ноди декларації, тобто на початок рядку, а змінна в 5 колонці насправді.
+Response: Ви абсолютно праві. У методичці до лабораторної чітко зазначено:
+«Every node keeps the line and column of the token it came from — the name for a declaration or an assignment, the operator for an operation.»
+Використання позиції i32_tok для DeclNode замість name_tok є помилкою, оскільки при семантичній перевірці (наприклад, якщо змінна вже оголошена) компілятор вкаже на початок рядка (i32), а не на саму змінну.
+Аналіз усіх вузлів (де позиція правильна, а де ні)
+1. DeclNode — НЕПРАВИЛЬНО (потрібно виправити)
+Поточний код:
+return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init)
+
+
+Чому це помилка: Для оголошення i32 mut x{5} токен i32 знаходиться у колонці 1, а ім'я x — у колонці 9. Якщо x вже існує, помилка redeclared variable вкаже на позицію 1:1 замість 1:9.
+Як має бути:
+return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init)
+
+
+2. AssignNode — ПРАВИЛЬНО
+Код у parse_assignment:
+var_tok = self.eat()  # ident
+...
+return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+
+
+Чому правильно: var_tok — це токен ідентифікатора (наприклад, x у x := 5). Помилка про присвоєння неконстантній або неоголошеній змінній вкаже чітко на назву цієї змінної.
+3. BinOpNode — ПРАВИЛЬНО
+Код у parse_value:
+op_tok = self.eat()
+...
+return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right)
+
+
+Чому правильно: Позиція беруться з токена оператора (+, -, *), що відповідає вимозі "the operator for an operation".
+4. VarNode та ConstNode — ПРАВИЛЬНО
+Код у parse_operand:
+if tok.kind == "ident":
+    self.eat()
+    return VarNode(tok.line, tok.col, tok.text)
+elif tok.kind == "constant":
+    self.eat()
+    return ConstNode(tok.line, tok.col, tok.text)
+
+
+Чому правильно: Вузли отримують позиції безпосередньо з токенів змінної чи числа. Якщо зміна невизначена у виразі i32 a{b + 1}, помилка вкаже саме на колонку ідентифікатора b.
+Виправлений метод parse_decl для парсера:
+def parse_decl(self):
+    i32_tok = self.eat()  # "i32"
+    mutable = False
+
+    tok = self.peek()
+    if tok is not None and tok.kind == "specifier" and tok.text == "mut":
+        self.eat()
+        mutable = True
+
+    name_tok = self.expect("ident", "variable name")
+    self.expect("lbrace", "'{'")
+
+    init = self.parse_value(is_exit=False)
+
+    self.expect("rbrace", "'}'")
+
+    # Передаємо name_tok.line та name_tok.col замість i32_tok
+    return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init)
+
+
+
+User prompt: також при проходженні деякі тести падають, адже наявність exit перевіряється раніше за всю програму: FAIL invalid_7_redeclaration_and_extra_tokens: stderr differs from invalid_7_redeclaration_and_extra_tokens.err 	   expected: compilation error: line 2:5: redeclared variable 	   actual:   compilation error: line 2:1: missing exit statement
+Response: Ця проблема виникає через різницю між синтаксичним розбором (Task 2) та семантичним обходом дерева (Task 3).
+Чому падав тест?
+У вас перевірка if not has_exit: виконувалася безпосередньо всередині parse_program().
+Якщо тестовий файл містив семантичну помилку на початку (наприклад, повторне оголошення змінної redeclared variable у рядку 2), але не мав конструкції exit наприкінці:
+parse_program() завершував парсинг і одразу перевіряв наявність exit.
+Не знайшовши exit, він викликав raise_err(5, ...) (missing exit statement) і переривав програму.
+До обходу дерева через CodeGenVisitor (де й мала виявитися помилка redeclared variable) код навіть не доходив.
+Згідно з логікою практики, семантичні перевірки інструкцій у дереві виконуються послідовно. Якщо перевірку наявності exit перенести у візитор після обходу всіх stmts, компілятор спочатку виявить семантичну помилку у рядку 2, а вже якщо всі стейтменти правильні — перевірить наявність exit.
+Як це виправити?
+1. Приберіть виклик raise_err(5) із parse_program
+Дозвольте parse_program повертати ProgramNode з exit_node = None:
+    def parse_program(self):
+        stmts = []
+        exit_node = None
+        has_exit = False
+
+        for line_toks in self.lines:
+            if not line_toks:
+                continue
+            self.toks, self.pos = line_toks, 0
+
+            if has_exit:
+                line, col = self.get_pos_info()
+                raise_err(6, line, col)  # Exit must be the last statement
+
+            tok = self.peek()
+            if tok.kind == "statement" and tok.text == "exit":
+                exit_node = self.parse_exit()
+                has_exit = True
+            else:
+                stmt_node = self.parse_statement()
+                stmts.append(stmt_node)
+
+            if self.peek() is not None:
+                line, col = self.get_pos_info()
+                if has_exit:
+                    raise_err(7, line, col)  # Unparsable exit statement
+                else:
+                    leftover = self.peek()
+                    raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
+
+        # Не піднімаємо raise_err(5) тут! Повертаємо дерево як є.
+        first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
+        first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1)
+        return ProgramNode(first_line, first_col, stmts, exit_node)
+
+
+2. Перенесіть перевірку missing exit statement у CodeGenVisitor.visit_program
+Перевіряйте наявність exit після того, як обійти всі стейтменти циклом:
+class CodeGenVisitor:
+    # ...
+
+    def visit_program(self, node):
+        # 1. Спочатку проходимо по всіх стейтментах і перевіряємо їхню семантику
+        for stmt in node.stmts:
+            stmt.accept(self)
+        
+        # 2. Якщо під час обходу стейтментів помилок не виникло, перевіряємо exit
+        if node.exit:
+            node.exit.accept(self)
+        else:
+            # Якщо exit відсутній — піднімаємо помилку 5 на останньому рядку програми
+            err_line = node.stmts[-1].line if node.stmts else node.line
+            raise_err(5, err_line, 1)
+
+
+Після цього тест invalid_7_redeclaration_and_extra_tokens спочатку виявить повторне оголошення змінної у рядку 2:5 і видасть очікуване redeclared variable.
+
+User prompt: така ж зміна тесту, щоб він проходив не буде порушувати якісь правила завдання? FAIL invalid_1_unknown_byte: stderr differs from invalid_1_unknown_byte.err 	   expected: compilation error: line 1:12: unexpected byte $ 	   actual:   compilation error: line 1:12: invalid variable name
+Response: Ні, це не порушує жодних правил завдання. Навпаки, виправлення коду для проходження автотестів є абсолютно правильним і необхідним кроком.
+Файли .err у тестовій системі — це точний контракт (специфікація) вашої лабораторної роботи. Якщо тест очікує unexpected byte $, це означає, що за вимогами завдання даний символ повинен оброблятися саме так.
+Чому виникає ця розбіжність і як її виправити
+Розбіжність виникла через плутанину між рівнями обробки:
+unexpected byte <char> (Код 10): Має викликатися в лексері під час сканування рядка. Якщо лексер бачить символ, який не входить до алфавіту мови (наприклад, $, @, #, %), він повинен одразу перервати роботу і видати помилку 10 із цим символом.
+invalid variable name (Код 3): Викликається тоді, коли токен є лексично коректним, але порушує правила найменування (наприклад, ідентифікатор починається з цифри 123var), або коли парсер очікував назву змінної, а отримав щось інше.
+Якщо ваш компілятор видав invalid variable name замість unexpected byte $, це означає, що лексер пропустив символ $ далі (або сформував з нього токен), і помилку виявив уже парсер.
+Перевірка лексера для стану START
+Переконайтеся, що в лексері у стані START будь-який символ, який не є літерою, цифрою, дужкою чи оператором, одразу генерує помилку 10:
+# У функції lex() всередині стану START:
+if state == "START":
+    if b is None:
+        break
+    elif b in (32, 9):  # пробіл, табуляція
+        pass
+    elif b == 10:       # новий рядок
+        if open_brace_col is not None:
+            raise_err(9, line, open_brace_col)
+        lexer_lines.append(tokens)
+        tokens = []
+        line += 1
+        col = 0
+    elif is_alpha(b):
+        state, start, start_col = "IDENT", i, col
+    elif is_digit(b):
+        state, start, start_col = "NUMBER", i, col
+    elif b == ord("{"):
+        tokens.append(Token("lbrace", "{", line, col))
+        open_brace_col = col
+    elif b == ord("}"):
+        tokens.append(Token("rbrace", "}", line, col))
+        open_brace_col = None
+    elif b == ord(":"):
+        state = "ASSIGN"
+        start_col = col
+    elif is_operator(b):
+        tokens.append(Token("operator", chr(b), line, col))
+    else:
+        # Усі невідомі символи ($ , @ , # тощо) викликають помилку 10
+        raise_err(10, line, col, ue_part=chr(b))
+
+
+Також перевірте, щоб у функції raise_err для коду 10 правильно додавався символ:
+if error_number in (1, 2, 10, 11, 12) and ue_part:
+    msg += f" {ue_part}"
+
+
+Після цієї правки лексер зупиниться на символі $ у колонці 12 і видасть точний stderr, якого очікує тест: compilation error: line 1:12: unexpected byte $.
+
+User prompt: ось така програма, питання в тому чи варто виправити тест чи код компілятора? (lcd) ubuntu@llvm-env:~/supa-compilation/tests$ cat invalid_1_unknown_byte.txt i32 x { 10 $ }
+Response: Однозначно потрібно виправляти код компілятора, а не тест.
+Ось чому:
+Призначення тесту: Назва файлу invalid_1_unknown_byte.txt та його вміст i32 x { 10 $ } чітко вказують, що тест перевіряє обробку невідомого символу ($). Символ $ не є частиною алфавіту вашої мови (це не число, не назва змінної, не дужка і не оператор).
+Вимоги специфікації: Файли .err у тестовому наборі є етлоном (специфікацією). Якщо змінювати тести під неправильну поведінку компілятора, втрачається весь сенс автоматичного тестування.
+Логіка лексера: Лексер повинен зупинятися та видавати помилку №10 (unexpected byte $) одразу на етапі сканування символу $, не передаючи його далі в парсер.
+Чому компілятор видає invalid variable name і як це виправити
+Помилка invalid variable name (код 3) виникає тоді, коли символ $ з якоїсь причини потрапляє в парсер (або обробляється не як невідомий байт у лексері).
+Перевірте обробку у лексері (lex):
+У стані START: Символ $ (ASCII 36) не потрапляє під is_alpha, is_digit, is_operator, пробіли чи дужки. Він повинен потрапляти в блок else:
+elif state == "START":
+    # ...
+    else:
+        raise_err(10, line, col, ue_part=chr(b))
+
+
+Перевірте визначення raise_err: Переконайтеся, що для помилки 10 правильно додається символ ue_part:
+def raise_err(error_number, err_line, column, ue_part=""):
+    # ...
+    if error_number in (1, 2, 10, 11, 12) and ue_part:
+        msg += f" {ue_part}"
+    sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n")
+    sys.exit(error_number)
+
+
+Після того, як лексер буде зупинятися на символі $, він одразу поверне compilation error: line 1:12: unexpected byte $ із кодом завершення 10, і тест успішно пройде.
+
+User prompt: ось код, переглянь чому може так відбуватись: from llvmlite import ir import llvmlite.binding as llvm import argparse import sys parser = argparse.ArgumentParser() parser.add_argument("source_path", help="path to the .txt file with your code") parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file") parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout") parser.add_argument("--ast", action="store_true", help="print the AST tree and exit") args = parser.parse_args() I32, I8 = ir.IntType(32), ir.IntType(8) module = ir.Module(name="practice1") module.triple = llvm.get_default_triple() main = ir.Function(module, ir.FunctionType(I32, []), name="main") entry_block = main.append_basic_block("entry") builder = ir.IRBuilder(entry_block) printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf") # declaration only text = b"Program exit with result %d\n\0" fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt") fmt.linkage, fmt.global_constant = "private", True fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text)) TYPES = { "i32": I32, } KEYWORDS = { "i32": "typename", "mut": "specifier", "exit": "statement", } OPERATORS = { "+": builder.add, "-": builder.sub, "*": builder.mul, } def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable" } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (1, 2, 10, 11, 12) and ue_part: msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13) class Token: def __init__(self, kind, text, line, col): self.kind = kind self.text = text self.line = line self.col = col def to_str(self): return f"({self.kind}, {self.text}, {self.line}, {self.col})" def is_alpha(b): if (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_"): return True return False def is_digit(b): if ord("0") <= b <= ord("9"): return True return False def is_operator(b): if ord("*") == b or ord("+") == b or ord("-") == b: return True return False def lex(data: bytes): lexer_lines, tokens = [], [] state, start, line, col = "START", 0, 1, 1 open_brace_col = None start_col = 1 i = 0 while i <= len(data): # one extra step: the end of input b = data[i] if i < len(data) else None if state == "START": if b is None: break elif b in (32, 9): pass # space, tab elif b == 10: # new line if open_brace_col is not None: raise_err(9, line, open_brace_col) lexer_lines.append(tokens) tokens = [] line += 1; col = 0 elif is_alpha(b): state, start, start_col = "IDENT", i, col elif is_digit(b): state, start, start_col = "NUMBER", i, col elif b == ord("{"): tokens.append(Token("lbrace","{", line, col)) open_brace_col = col elif b == ord("}"): tokens.append(Token("rbrace", "}", line, col)) open_brace_col = None elif b == ord(":"): state = "ASSIGN" start_col = col elif is_operator(b): tokens.append(Token("operator", chr(b), line, col)) else: raise_err(3, line, col, ue_part = chr(b)) elif state == "IDENT": if b is not None and (is_alpha(b) or is_digit(b)): pass else: word = data[start:i] tokens.append(Token(KEYWORDS.get(word.decode(), "ident"), word.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "NUMBER": if b is not None and is_digit(b): pass#braces elif b is not None and is_alpha(b): raise_err(10, line, col, ue_part = chr(b)) else: num = data[start:i] tokens.append(Token(KEYWORDS.get(num.decode(), "constant"), num.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "ASSIGN": if b == ord("="): tokens.append(Token("assignment", ":=", line, start_col)) state = "START" else: raise_err(10, line, col, ue_part = chr(b)) i += 1; col += 1 if tokens: lexer_lines.append(tokens) return lexer_lines class ProgramNode: def __init__(self, line, col, stmts, exit_node): self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node def dump(self, indent=0): print(" " * indent + "Program") for stmt in self.stmts: stmt.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_program(self) class DeclNode: def __init__(self, line, col, name: str, mutable: bool, init): self.line, self.col, self.name, self.mutable, self.init = line, col, name, mutable, init def dump(self, indent=0): kind = "mut" if self.mutable else "const" print(" " * indent + f"Decl {self.name} {kind}") self.init.dump(indent + 2) def accept(self, visitor): return visitor.visit_decl(self) class AssignNode: def __init__(self, line, col, name, value): self.line, self.col, self.name, self.value = line, col, name, value def dump(self, indent=0): print(" " * indent + f"Assign {self.name}") self.value.dump(indent + 2) def accept(self, visitor): return visitor.visit_assign(self) class BinOpNode: def __init__(self, line, col, op, left, right): self.line, self.col, self.op, self.left, self.right = line, col, op, left, right def dump(self, indent=0): print(" " * indent + f"BinOp {self.op}") self.left.dump(indent + 2) self.right.dump(indent + 2) def accept(self, visitor): return visitor.visit_binop(self) class VarNode: def __init__(self, line, col, name): self.line, self.col, self.name = line, col, name def dump(self, indent=0): print(" " * indent + f"Var {self.name}") def accept(self, visitor): return visitor.visit_var(self) class ConstNode: def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Const {self.val}") def accept(self, visitor): return visitor.visit_const(self) class ExitNode: def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + "Exit") self.val.dump(indent + 2) def accept(self, visitor): return visitor.visit_exit(self) class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) # Exit must be the last statement tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() if has_exit: raise_err(7, line, col) # Unparsable exit statement else: leftover = self.peek() raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement") first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, "expected statement, found end of line") if tok.kind == "typename" and tok.text == "i32": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'") def parse_decl(self): i32_tok = self.eat() # "i32" mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.expect("ident", "variable name") self.expect("lbrace", "'{'") init = self.parse_value(is_exit=False) self.expect("rbrace", "'}'") return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident self.expect("assignment", "':='") value = self.parse_value(is_exit=False) return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_value(self, is_exit=False): # value ::= operand [ op operand ] left = self.parse_operand(is_exit) tok = self.peek() if tok is not None and tok.kind == "operator": op_tok = self.eat() right = self.parse_operand(is_exit) return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right) return left def parse_operand(self, is_exit=False): # operand ::= ident | constant tok = self.peek() if tok is None: line, col = self.get_pos_info() if is_exit: raise_err(7, line, col) else: raise_syntax_err(line, col, "expected constant or variable, found end of line") if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) else: if is_exit: raise_err(7, tok.line, tok.col) else: raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'") class CodeGenVisitor: def __init__(self, builder, printf_func, fmt_global): self.builder = builder self.printf = printf_func self.fmt_global = fmt_global # Symbol table: name -> (alloca_ptr, is_mutable) self.symbols = {} def visit_program(self, node): for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) else: err_line = node.stmts[-1].line if node.stmts else node.line raise_err(5, err_line, 1) def visit_decl(self, node): if node.name in self.symbols: raise_err(1, node.line, node.col, ue_part=f"'{node.name}'") # redeclared variable init_val = node.init.accept(self) ptr = self.builder.alloca(I32, name=node.name) self.builder.store(init_val, ptr) self.symbols[node.name] = (ptr, node.mutable) def visit_assign(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, is_mutable = self.symbols[node.name] if not is_mutable: raise_err(12, node.line, node.col, ue_part=f"'{node.name}'") # cannot assign to const val = node.value.accept(self) self.builder.store(val, ptr) def visit_exit(self, node): val = node.val.accept(self) # GEP to get pointer to format string fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, val]) self.builder.ret(ir.Constant(I32, 0)) def visit_binop(self, node): left_val = node.left.accept(self) right_val = node.right.accept(self) if node.op == "+": return self.builder.add(left_val, right_val) elif node.op == "-": return self.builder.sub(left_val, right_val) elif node.op == "*": return self.builder.mul(left_val, right_val) else: raise_err(8, node.line, node.col) # unsupported operator def visit_var(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, _ = self.symbols[node.name] return self.builder.load(ptr, name=node.name) def visit_const(self, node): return ir.Constant(I32, int(node.val)) with open(args.source_path, "rb") as f: file_bytes = f.read() lines = lex(file_bytes) if args.tokens: for line in lines: for token in line: print(token.to_str() + " ") print() parser_obj = Parser(lines) ast = parser_obj.parse_program() if args.ast: ast.dump() sys.exit(0) codegen = CodeGenVisitor(builder, printf, fmt) ast.accept(codegen) if args.output_path: with open(args.output_path, "w") as out_f: out_f.write(str(module))
+Response: Ви чудово застосували всі попередні виправлення!
+Дерево AST тепер друкується правильно, позиція для DeclNode береться з імені змінної, а перевірка на exit логічно перенесена у CodeGenVisitor.
+Проте тест invalid_1_unknown_byte.txt (з кодом i32 x { 10 $ }) все ще видаватиме invalid variable name замість unexpected byte $. Я знайшов, чому це відбувається.
+Помилка криється в одному рядку вашого лексера у стані START.
+Де саме помилка
+Подивіться на блок if state == "START": у функції lex. У самому кінці цього блоку (приблизно на 122-му рядку вашого коду) є такий else:
+            elif is_operator(b):
+                tokens.append(Token("operator", chr(b), line, col))
+            else:
+                # ОСЬ ТУТ ПОМИЛКА:
+                raise_err(3, line, col, ue_part = chr(b))
+
+
+Ви передаєте код 3 ("invalid variable name"), а повинні передавати код 10 ("unexpected byte").
+Як лексер обробляє i32 x { 10 $ } зараз:
+Читає i32, x, {, 10 — усе правильно.
+Після 10 йде пробіл, він ігнорується у стані START.
+Далі лексер бачить символ $.
+Він перевіряє: це літера? (Ні). Цифра? (Ні). Дужка? (Ні). Оператор? (Ні).
+Лексер потрапляє у гілку else для невідомих символів і... викликає raise_err(3)!
+Відповідно, програма падає з повідомленням invalid variable name $, хоча має бути unexpected byte $.
+Як виправити
+Просто замініть 3 на 10 у гілці else для стану START:
+            elif is_operator(b):
+                tokens.append(Token("operator", chr(b), line, col))
+            else:
+                # Виправляємо 3 на 10
+                raise_err(10, line, col, ue_part=chr(b))
+
+
+Додатковий нюанс у стані NUMBER
+Зверніть увагу на цей шматочок у стані "NUMBER":
+        elif state == "NUMBER":
+            if b is not None and is_digit(b):
+                pass#braces
+            elif b is not None and is_alpha(b):
+                raise_err(10, line, col, ue_part = chr(b))
+
+
+Тут ви викликаєте помилку 10 (unexpected byte), якщо після цифри одразу йде літера (наприклад 10a). Хоча, згідно з правилами більшості подібних завдань, 10a — це зазвичай лексична помилка invalid variable name (бо ідентифікатор не може починатися з цифри), або парсер видасть помилку. Але якщо тести це пропускають або так і задумано — можете залишити. Головне виправлення — це змінити 3 на 10 у стані START.
+Після заміни raise_err(3, ...) на raise_err(10, ...) у стані START, ваш компілятор ідеально пройде тест на невідомий байт!
+
+User prompt: як мені з інстансу мультипасу витягнути папку
+Response: Найпростіший спосіб скопіювати папку з інстансу Multipass на ваш комп'ютер (хост) — використати команду multipass transfer.
+Спосіб 1. Копіювання за допомогою multipass transfer
+Основний синтаксис:
+multipass transfer <ім'я_інстансу>:<шлях_до_папки_в_інстансі> <шлях_на_комп'ютері>
+
+
+Приклад: Якщо ваш інстанс називається primary, а папка знаходиться за шляхом /home/ubuntu/my_project і ви хочете скопіювати її в поточну папку на комп'ютері:
+multipass transfer primary:/home/ubuntu/my_project ./my_project
+
+
+Спосіб 2. Підключення спільної папки (multipass mount)
+Якщо ви регулярно працюєте з файлами у цій папці, зручніше змонтувати папку з вашого комп'ютера безпосередньо в інстанс. Усі зміни будуть миттєво зберігатися на вашому комп'ютері.
+Створіть папку на комп'ютері та змонтуйте її в інстанс:
+multipass mount /Users/user/my_folder primary:/home/ubuntu/my_folder
+
+
+Тепер будь-які файли, збережені в /home/ubuntu/my_folder усередині інстансу, одразу з'являться на вашому комп'ютері.
+Щоб дізнатися ім'я вашого інстансу, якщо ви його забули, виконайте команду multipass list.
+
+User prompt: darynaburdak@MacBook-Air-Daryna supa-compilation % multipass transfer llvm-env:/home/ubuntu/supa-compilation/tests /Users/darynaburdak/Downloads/tests         [2026-09-21T23:15:10.046] [error] [sftp] omitting remote directory /home/ubuntu/supa-compilation/tests: recursive mode not specified darynaburdak@MacBook-Air-Daryna supa-compilation % 
+Response: Помилка виникає тому, що для копіювання усієї папки разом із вмістом потрібно передати прапорець рекурсивного копіювання -r.
+Запустіть у терміналі виправлену команду:
+multipass transfer -r llvm-env:/home/ubuntu/supa-compilation/tests /Users/darynaburdak/Downloads/tests
+
+
+
+User prompt: що в цьому завданні треба зробити? TASK 4 — PRECEDENCE AND CHAINS (1 POINT) The language The initialiser and the right side of := now accept any chain of constants and variables joined by +, - and *. * binds tighter than + and -; operators of equal precedence group from left to right. No parentheses this week, and exit is unchanged: it takes a constant or a variable. i32 x{2 + 3 * 4} 14, not 20 i32 mut a{10 - 3 - 2} 5, not 9 a := a * 2 - 1 9 i32 z{x * a - 6} 120 exit z Expected: Program exit with result 120. The grammar does the work Replace value with three rules — one per precedence level; operand stays, exit still uses it: expr ::= term { ("+" | "-") term } term ::= factor { "*" factor } factor ::= number | ident Read it bottom-up. A factor is the tightest thing there is: a constant or a variable. A term is factors joined by *; an expr is terms joined by + or -. Because parse_expr calls parse_term before it looks for a +, everything a * glues together is already one node by the time the + is seen — that is precedence, without a table. And because the loop builds the new BinOpNode with what it has so far as the left child, 10 - 3 - 2 comes out as (10 - 3) - 2 — that is left associativity, without a flag: def parse_expr(self): # expr ::= term { ("+" | "-") term } node = self.parse_term() while (tok := self.peek()) is not None and tok.kind == "op" and tok.text in "+-": self.eat() node = BinOpNode(tok.line, tok.col, tok.text, node, self.parse_term()) return node parse_term is the same loop over * and parse_factor; parse_factor is the old operand: a constant or a variable, nothing else. The two trees you must be able to draw before you code: i32 x{2 + 3 * 4} i32 mut a{10 - 3 - 2} BinOp + BinOp - Const 2 BinOp - BinOp * Const 10 Const 3 Const 3 Const 4 Const 2 If you prefer precedence climbing — one function with a table of binding powers instead of one function per level — do it; it is graded by the trees it builds, and they must be these. The lexer does not change Every token a chain needs — names, numbers, +, -, * — the lexer of Practice 2 already emits. Parentheses are not part of the language yet; ( is an unknown byte, and the lexer says so. Errors All from the parser, all with line:column: two operators in a row (line 1:11: expected a constant or a variable, got '*'), an operator at the end of a line, an operator right after {. The semantic errors of Practice 2 are unchanged and now come from inside expressions too: i32 x{y + 1 * 2} with no y is line 1:7: variable 'y' is used before its declaration. 5 Tests A tests/ folder with at least 5 programs that compile and run, and at least 5 that must fail, each with its expected output or error message in a file next to it. Cover: 2 + 3 * 4, a chain where * sits in the middle (1 + 2 * 3 + 4), a left-associative chain of -, an expression on the right of :=, and the valid program of Practice 2 (still 70); two operators in a row, an operator at the end of a line, an operator right after {, tokens after a statement, and one Practice 2 error to prove nothing regressed. A .ast file with the expected dump next to each valid program is welcome. Run the valid ones through lli.
+Response: У Task 4 потрібно розширити компілятор так, щоб він підтримував складні математичні вирази довільної довжини з урахуванням пріоритетів операцій (* має вищий пріоритет за + і -) та лівої асоціативності (10 - 3 - 2 оцінюється як (10 - 3) - 2).
+1. Зміна граматики та Парсера
+Замість старої логіки value ::= operand [ op operand ] (яка дозволяла максимум одну операцію), вам потрібно переписати синтаксичний аналізатор виразів на три класичні рівні пріоритету:
+parse_expr() — обробляє додавання та віднімання (+, -).
+parse_term() — обробляє множення (*).
+parse_factor() — обробляє "атомарні" значення (змінну або константу).
+Приклад реалізації у вашому класі Parser:
+def parse_expr(self):
+    # expr ::= term { ("+" | "-") term }
+    node = self.parse_term()
+    while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-":
+        op_tok = self.eat()
+        node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term())
+    return node
+
+def parse_term(self):
+    # term ::= factor { "*" factor }
+    node = self.parse_factor()
+    while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*":
+        op_tok = self.eat()
+        node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_factor())
+    return node
+
+def parse_factor(self):
+    # factor ::= number | ident
+    tok = self.peek()
+    if tok is None:
+        line, col = self.get_pos_info()
+        raise_syntax_err(line, col, "expected constant or variable, found end of line")
+
+    if tok.kind == "ident":
+        self.eat()
+        return VarNode(tok.line, tok.col, tok.text)
+    elif tok.kind == "constant":
+        self.eat()
+        return ConstNode(tok.line, tok.col, tok.text)
+    else:
+        raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
+
+
+2. Де викликати нові функції
+У parse_decl() та parse_assignment(): замість self.parse_value() тепер викликається self.parse_expr().
+У parse_exit(): залишається без змін (parse_factor() або parse_operand()), тому що exit за умовою приймає тільки одну константу або змінну, а не вираз.
+Дужки () у цій практиці НЕ підтримуються. Якщо в коді є дужка (, лексер має видавати помилку невідомого байту.
+3. Оформлення тестування (Папка tests/)
+Вам необхідно створити папку tests/ і додати туди щонайменше 10 тестових файлів разом із файлами очікуваного виводу:
+5 правильних програм (із розширенням .txt та відповідними .out або .ast):
+Програма з 2 + 3 * 4 (результат 14).
+Ланцюжок, де множення посередині: 1 + 2 * 3 + 4.
+Ланцюжок віднімань для перевірки лівої асоціативності: 10 - 3 - 2 (результат 5).
+Присвоєння виразу змінній: a := a * 2 - 1.
+Валідна програма з Practice 2 (має видавати 70).
+5 некоректних програм (із розширенням .txt та очікуваним текстом помилки у .err):
+Два оператори поспіль: i32 x{2 + * 3}.
+Оператор наприкінці рядка: i32 x{2 +}.
+Оператор одразу після {: i32 x{ + 2}.
+Зайві токени після стейтменту: i32 x{2} 5.
+Семантична помилка (використання неоголошеної змінної у виразі): i32 x{y + 1 * 2}.
+
+User prompt: питання а ось цей файл з граматикою це ж прост о документація правильно? .ebnf
+Response: Так, абсолютно правильно. Файл grammar.ebnf — це виключно документація та специфікація формату вашої мови для людей (і для викладача).
+Ваш Python-скрипт (compiler.py) не читає, не імпортує і не виконує цей файл під час роботи.
+Ось навіщо він потрібен у цьому завданні:
+Для оцінювання (Task 1 — 0.5 бала): Ви здаєте цей файл (або блок коментарів на початку compiler.py), щоб викладач перевірив, чи правильно ви формалізували всі правила мови за нотацією EBNF.
+Для вас як «креслення»: Ви дивитесь на правила з grammar.ebnf і за ними вручну переписуєте кожне правило у відповідну функцію парсера в Python (parse_expr(), parse_term(), parse_factor() тощо).
+Оскільки в умовах практики заборонено використовувати генератори парсерів (на зразок ANTLR, Lark чи Yacc, які могли б автоматично зчитувати граматику), ваш компілятор працює повністю на власному коді, а файл .ebnf залишається чистою текстовою специфікацією.
+
+User prompt: поясни мені ці правила, чому десь немає множення? expr ::= term { ("+" | "-") term } term ::= factor { "*" factor } factor ::= number | ident
+Response: Розділення операцій по різних правилах — це класичний спосіб задати пріоритет операцій (precedence) прямо в граматиці мови, без використання додаткових таблиць чи складного коду.
+Множення * знаходиться тільки в term, а додавання й віднімання +, - — тільки в expr. Ось детальне пояснення, чому це так працює:
+1. Порозрядний розбір правил (знизу вгору)
+factor ::= number | ident
+Що це: Це «найтісніший» і найпростіший елемент — целе число або назва змінної. Тобто просто базове значення без жодних операторів.
+term ::= factor { "*" factor }
+Що це: Це група факторів, з'єднаних між собою знаками множення *.
+Чому тут тільки *: Оскільки множення має вищий пріоритет за додавання, воно має «склеювати» сусідні числа першим. Правило каже: "Все, що з'єднане зірочками *, утворює один суцільний term".
+expr ::= term { ("+" | "-") term }
+Що це: Це повний вираз, який складається з term-ів, з'єднаних плюсами або мінусами.
+Чому тут немає *: Тому що додавання та віднімання виконуються після того, як усі множення вже «згруповані» у відповідні term-и.
+2. Як це працює на прикладі виразу 2 + 3 * 4
+Уявіть, що парсер викликає функцію parse_expr() для виразу 2 + 3 * 4:
+Спочатку parse_expr() викликає parse_term() для першої частини:
+parse_term() зчитує 2 (як factor). Наступний символ + (це не *), тому term закінчується і повертає вузол Const(2).
+parse_expr() бачить знак +:
+Зберігає оператор +.
+Далі викликає parse_term() для другої частини (3 * 4).
+Другий виклик parse_term() обробляє 3 * 4:
+Зчитує 3 (як factor).
+Бачить знак *, зчитує його і бере наступний factor — 4.
+Збирає їх у вузол множення: BinOp(*, Const(3), Const(4)).
+Повертає цей готовий вузол назад у parse_expr().
+parse_expr() створює підсумковий вузол додавання:
+Об'єднує ліву частину Const(2) та праву частину BinOp(*, Const(3), Const(4)) через +.
+Результат у дереві AST:
+  BinOp +
+  ├── Const 2
+  └── BinOp *
+      ├── Const 3
+      └── Const 4
+
+
+Оскільки вузол BinOp * виявився нижче у дереві, під час генерації коду (або обчислення) вираз 3 * 4 виконається першим, а вже потім до його результату додасться 2.
+Підсумок: Множення немає в expr, тому що expr працює вже з готовими блоками (term), всередині яких множення повністю виконано й згруповано.
+
+User prompt: тепер можеш будь ласка змінити код щоб він відповідав новим правилам: program ::= { statement } finish declaration ::= "i32" [ "mut" ] ident "{" value "}" assignment ::= ident ":=" value finish ::= "exit" operand statement ::= declaration | assignment operand ::= ident | number expr ::= term { ("+" | "-") term } term ::= operand { "*" operand } я так розумію що змінюється лише цей метод і йому на заміну приходять три інші? def parse_value(self, is_exit=False): # value ::= operand [ op operand ] left = self.parse_operand(is_exit) tok = self.peek() if tok is not None and tok.kind == "operator": op_tok = self.eat() right = self.parse_operand(is_exit) return BinOpNode(op_tok.line, op_tok.col, op_tok.text, left, right) return left
+Response: Так, абсолютно правильно! Замість одного методу parse_value у парсері з'являються три методи: parse_expr, parse_term та parse_operand.
+Окрім додавання цих методів, у самому парсері потрібно лише змінити виклик parse_value() на parse_expr() у двох місцях:
+Всередині parse_decl() (ініціалізація змінної у {}).
+Всередині parse_assignment() (права частина від :=).
+У parse_exit() залишається виклик parse_operand(is_exit=True), оскільки команда exit за вашою граматикою приймає лише operand (змінну або число), а не весь вираз.
+Оновлена частина коду Parser:
+    def parse_decl(self):
+        i32_tok = self.eat()
+        mutable = False
+
+        tok = self.peek()
+        if tok is not None and tok.kind == "specifier" and tok.text == "mut":
+            self.eat()
+            mutable = True
+
+        name_tok = self.peek()
+        if name_tok is None or name_tok.kind != "ident":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        name_tok = self.eat()
+
+        lbrace_tok = self.peek()
+        if lbrace_tok is None or lbrace_tok.kind != "lbrace":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        # ЗАМІНА: тепер викликаємо parse_expr() замість parse_value()
+        init = self.parse_expr()
+
+        rbrace_tok = self.peek()
+        if rbrace_tok is None or rbrace_tok.kind != "rbrace":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        return DeclNode(i32_tok.line, i32_tok.col, name_tok.text, mutable, init)
+
+    def parse_assignment(self):
+        var_tok = self.eat()
+
+        assign_tok = self.peek()
+        if assign_tok is None or assign_tok.kind != "assignment":
+            line, col = self.get_pos_info()
+            raise_err(4, line, col)
+        self.eat()
+
+        # ЗАМІНА: тепер викликаємо parse_expr() замість parse_value()
+        value = self.parse_expr()
+        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+
+    def parse_exit(self):
+        exit_tok = self.eat()
+        # Тут залишається parse_operand, бо exit приймає тільки operand
+        val = self.parse_operand(is_exit=True)
+        return ExitNode(exit_tok.line, exit_tok.col, val)
+
+    # --- НОВІ МЕТОДИ ДЛЯ ОБРОБКИ ВИРАЗІВ (Task 4) ---
+
+    def parse_expr(self):
+        # expr ::= term { ("+" | "-") term }
+        node = self.parse_term()
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-":
+            op_tok = self.eat()
+            # Будуємо лівоасоціативне дерево BinOpNode
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term())
+        return node
+
+    def parse_term(self):
+        # term ::= operand { "*" operand }
+        node = self.parse_operand()
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*":
+            op_tok = self.eat()
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
+        return node
+
+    def parse_operand(self, is_exit=False):
+        # operand ::= ident | number
+        tok = self.peek()
+        err_code = 7 if is_exit else 4
+
+        if tok is None:
+            line, col = self.get_pos_info()
+            raise_err(err_code, line, col)
+
+        if tok.kind == "ident":
+            self.eat()
+            return VarNode(tok.line, tok.col, tok.text)
+        elif tok.kind == "constant":
+            self.eat()
+            return ConstNode(tok.line, tok.col, tok.text)
+        else:
+            raise_err(err_code, tok.line, tok.col)
+
+
+
+User prompt: напиши тепер програмку та результат який ми маємо отримати при її виконанні а також дерево яке ми маємо отримати. тобто все щоб перевірити код, але лише на одному екземплярі. Ось повторно кидаю 4 завдання та всі вимоги що там є до коду та його результату: TASK 4 — PRECEDENCE AND CHAINS (1 POINT) The language The initialiser and the right side of := now accept any chain of constants and variables joined by +, - and *. * binds tighter than + and -; operators of equal precedence group from left to right. No parentheses this week, and exit is unchanged: it takes a constant or a variable. i32 x{2 + 3 * 4} 14, not 20 i32 mut a{10 - 3 - 2} 5, not 9 a := a * 2 - 1 9 i32 z{x * a - 6} 120 exit z Expected: Program exit with result 120. The grammar does the work Replace value with three rules — one per precedence level; operand stays, exit still uses it: expr ::= term { ("+" | "-") term } term ::= factor { "*" factor } factor ::= number | ident Read it bottom-up. A factor is the tightest thing there is: a constant or a variable. A term is factors joined by *; an expr is terms joined by + or -. Because parse_expr calls parse_term before it looks for a +, everything a * glues together is already one node by the time the + is seen — that is precedence, without a table. And because the loop builds the new BinOpNode with what it has so far as the left child, 10 - 3 - 2 comes out as (10 - 3) - 2 — that is left associativity, without a flag: def parse_expr(self): # expr ::= term { ("+" | "-") term } node = self.parse_term() while (tok := self.peek()) is not None and tok.kind == "op" and tok.text in "+-": self.eat() node = BinOpNode(tok.line, tok.col, tok.text, node, self.parse_term()) return node parse_term is the same loop over * and parse_factor; parse_factor is the old operand: a constant or a variable, nothing else. The two trees you must be able to draw before you code: i32 x{2 + 3 * 4} i32 mut a{10 - 3 - 2} BinOp + BinOp - Const 2 BinOp - BinOp * Const 10 Const 3 Const 3 Const 4 Const 2 If you prefer precedence climbing — one function with a table of binding powers instead of one function per level — do it; it is graded by the trees it builds, and they must be these. The lexer does not change Every token a chain needs — names, numbers, +, -, * — the lexer of Practice 2 already emits. Parentheses are not part of the language yet; ( is an unknown byte, and the lexer says so. Errors All from the parser, all with line:column: two operators in a row (line 1:11: expected a constant or a variable, got '*'), an operator at the end of a line, an operator right after {. The semantic errors of Practice 2 are unchanged and now come from inside expressions too: i32 x{y + 1 * 2} with no y is line 1:7: variable 'y' is used before its declaration. 5 Tests A tests/ folder with at least 5 programs that compile and run, and at least 5 that must fail, each with its expected output or error message in a file next to it. Cover: 2 + 3 * 4, a chain where * sits in the middle (1 + 2 * 3 + 4), a left-associative chain of -, an expression on the right of :=, and the valid program of Practice 2 (still 70); two operators in a row, an operator at the end of a line, an operator right after {, tokens after a statement, and one Practice 2 error to prove nothing regressed. A .ast file with the expected dump next to each valid program is welcome. Run the valid ones through lli.
+Response: 1. Вхідна програма (test_task4.txt)
+Повний приклад вихідного коду для перевірки всіх вимог Task 4 (пріоритети операторів, ліва асоціативність, присвоєння виразу та робота exit):
+i32 x{2 + 3 * 4}
+i32 mut a{10 - 3 - 2}
+a := a * 2 - 1
+i32 z{x * a - 6}
+exit z
+
+
+2. Очікуване дерево AST (python3 compiler.py --ast test_task4.txt)
+Дерево, яке повинен вивести ваш метод dump(). Кожен рівень вкладеності має відступ у 2 пробіли:
+Program
+  Decl x const
+    BinOp +
+      Const 2
+      BinOp *
+        Const 3
+        Const 4
+  Decl a mut
+    BinOp -
+      BinOp -
+        Const 10
+        Const 3
+      Const 2
+  Assign a
+    BinOp -
+      BinOp *
+        Var a
+        Const 2
+      Const 1
+  Decl z const
+    BinOp -
+      BinOp *
+        Var x
+        Var a
+      Const 6
+  Exit
+    Var z
+
+
+3. Результат виконання програми (lli output.ll)
+Текст, який має вивестися у консоль після компіляції в LLVM IR та запуску:
+Program exit with result 120
+
+
+Як відбулися обчислення (для перевірки):
+x: 2+3×4=2+12=14 (множення виконалося першим, BinOp * нижче в дереві).
+a: 10−3−2=(10−3)−2=7−2=5 (ліва асоціативність, перше віднімання згруповане зліва).
+a := a * 2 - 1: 5×2−1=10−1=9.
+z: 14×9−6=126−6=120.
+exit z: Виводить 120.
+
+User prompt: а чи має за завданням якщо ast прапорець написаний записуватись щось у .ll файл?
+Response: Ні, при використанні прапорця --ast у файл .ll нічого не повинно записуватися.
+Вимога специфікації в розділі THE COMPILER INTERFACE:
+python3 compiler.py input.txt output.ll # compile, as before
+python3 compiler.py --ast input.txt     # print the tree, write nothing
+
+
+Тобто за наявності прапорця --ast компілятор повинен:
+Прочитати вхідний файл та побудувати дерево AST.
+Вивести надруковане дерево у консоль (stdout).
+Завершити роботу без створення чи зміни будь-яких файлів кодогенерації (.ll).
+

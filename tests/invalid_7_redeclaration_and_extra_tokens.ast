@@ -1,0 +1,5 @@
+Program
+  Decl x const
+    Const 1
+  Decl x const
+    Const 2
