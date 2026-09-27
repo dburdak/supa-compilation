@@ -1,0 +1,16 @@
+(typename, i32, 1, 1) 
+(specifier, mut, 1, 5) 
+(ident, y, 1, 9) 
+(lbrace, {, 1, 11) 
+(constant, 10, 1, 13) 
+(rbrace, }, 1, 16) 
+
+(ident, y, 2, 1) 
+(assignment, :=, 2, 3) 
+(ident, y, 2, 6) 
+(operator, +, 2, 8) 
+(constant, 5, 2, 10) 
+
+(statement, exit, 3, 1) 
+(ident, y, 3, 6) 
+

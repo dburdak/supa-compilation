@@ -1,0 +1,15 @@
+(typename, i32, 1, 1) 
+(ident, x, 1, 5) 
+(lbrace, {, 1, 7) 
+(constant, 1, 1, 9) 
+(operator, +, 1, 11) 
+(constant, 2, 1, 13) 
+(operator, *, 1, 15) 
+(constant, 3, 1, 17) 
+(operator, +, 1, 19) 
+(constant, 4, 1, 21) 
+(rbrace, }, 1, 23) 
+
+(statement, exit, 2, 1) 
+(ident, x, 2, 6) 
+

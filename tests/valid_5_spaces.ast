@@ -1,0 +1,5 @@
+Program
+  Decl space_var const
+    Const 100
+  Exit
+    Var space_var

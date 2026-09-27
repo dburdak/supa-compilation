@@ -1,0 +1,5 @@
+Program
+  Decl x const
+    Const 10
+  Assign x
+    Const 20
