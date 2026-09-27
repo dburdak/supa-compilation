@@ -156,6 +156,8 @@ def lex(data: bytes):
             if b == ord("="):
                 tokens.append(Token("assignment", ":=", line, start_col))
                 state = "START"
+            elif b is None:
+                raise_err(10, line, col, ue_part="'end of file'")
             else:
                 raise_err(10, line, col, ue_part = chr(b))
 
@@ -163,7 +165,11 @@ def lex(data: bytes):
     if tokens: lexer_lines.append(tokens)
     return lexer_lines
 
-class ProgramNode:
+class Node:
+    def __init__(self, line, col):
+        self.line, self.col = line, col
+
+class ProgramNode(Node):
     def __init__(self, line, col, stmts, exit_node):
         self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node
     
@@ -177,8 +183,13 @@ class ProgramNode:
     def accept(self, visitor):
         return visitor.visit_program(self)
 
+class StmtNode(Node):
+    pass
 
-class DeclNode:
+class ExprNode(Node):
+    pass
+
+class DeclNode(StmtNode):
     def __init__(self, line, col, name: str, mutable: bool, init):
         self.line, self.col, self.name, self.mutable, self.init = line, col, name, mutable, init
     
@@ -191,7 +202,7 @@ class DeclNode:
         return visitor.visit_decl(self)
 
 
-class AssignNode:
+class AssignNode(StmtNode):
     def __init__(self, line, col, name, value):
         self.line, self.col, self.name, self.value = line, col, name, value
     
@@ -203,7 +214,7 @@ class AssignNode:
         return visitor.visit_assign(self)
 
 
-class BinOpNode:
+class BinOpNode(ExprNode):
     def __init__(self, line, col, op, left, right):
         self.line, self.col, self.op, self.left, self.right = line, col, op, left, right
     
@@ -216,7 +227,7 @@ class BinOpNode:
         return visitor.visit_binop(self)
 
 
-class VarNode:
+class VarNode(ExprNode):
     def __init__(self, line, col, name):
         self.line, self.col, self.name = line, col, name
     
@@ -227,7 +238,7 @@ class VarNode:
         return visitor.visit_var(self)
 
 
-class ConstNode:
+class ConstNode(ExprNode):
     def __init__(self, line, col, val):
         self.line, self.col, self.val = line, col, val
     
@@ -237,7 +248,7 @@ class ConstNode:
     def accept(self, visitor):
         return visitor.visit_const(self)
 
-class ExitNode:
+class ExitNode(Node):
     def __init__(self, line, col, val):
         self.line, self.col, self.val = line, col, val
     
@@ -247,6 +258,7 @@ class ExitNode:
     
     def accept(self, visitor):
         return visitor.visit_exit(self)
+
 
 class Parser:
     def __init__(self, lines):
@@ -310,6 +322,10 @@ class Parser:
                     leftover = self.peek()
                     raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
 
+        if not has_exit:
+            err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
+            raise_err(5, err_line, 1)
+
         first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
         first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1)
         return ProgramNode(first_line, first_col, stmts, exit_node)
@@ -372,24 +388,6 @@ class Parser:
             op_tok = self.eat()
             node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
         return node
-
-    def parse_operand(self, is_exit=False):
-        # operand ::= ident | number
-        tok = self.peek()
-        err_code = 7 if is_exit else 4
-
-        if tok is None:
-            line, col = self.get_pos_info()
-            raise_err(err_code, line, col)
-
-        if tok.kind == "ident":
-            self.eat()
-            return VarNode(tok.line, tok.col, tok.text)
-        elif tok.kind == "constant":
-            self.eat()
-            return ConstNode(tok.line, tok.col, tok.text)
-        else:
-            raise_err(err_code, tok.line, tok.col)
 
     def parse_operand(self, is_exit=False):
         # operand ::= ident | constant

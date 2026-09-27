@@ -1,4 +1,3 @@
-
 program ::= { statement } finish
 
 declaration ::= "i32" [ "mut" ] ident "{" value "}"
@@ -13,6 +12,5 @@ operand ::= ident | number
 
 expr ::= term { ("+" | "-") term }
 
-term ::= factor { "*" factor }
+term ::= operand { "*" operand }
 
-factor ::= number | ident
