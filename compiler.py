@@ -12,6 +12,7 @@ parser.add_argument("--ast", action="store_true", help="print the AST tree and e
 args = parser.parse_args()
 
 I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64)
+I1 = ir.IntType(1)
 
 module = ir.Module(name="practice1")
 module.triple = llvm.get_default_triple()
@@ -20,15 +21,30 @@ entry_block = main.append_basic_block("entry")
 builder = ir.IRBuilder(entry_block)
 
 printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf")
-text = b"Program exit with result %d\n\0"
+text = b"Program exit with result %lld\n\0"
 fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt")
 fmt.linkage, fmt.global_constant = "private", True
 fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text))
 
+text_bool = b"Program exit with result %s\n\0"
+fmt_bool = ir.GlobalVariable(module, ir.ArrayType(I8, len(text_bool)), name="fmt_bool")
+fmt_bool.linkage, fmt_bool.global_constant = "private", True
+fmt_bool.initializer = ir.Constant(ir.ArrayType(I8, len(text_bool)), bytearray(text_bool))
+
+true_str = b"true\0"
+fmt_true = ir.GlobalVariable(module, ir.ArrayType(I8, len(true_str)), name="true_str")
+fmt_true.linkage, fmt_true.global_constant = "private", True
+fmt_true.initializer = ir.Constant(ir.ArrayType(I8, len(true_str)), bytearray(true_str))
+
+false_str = b"false\0"
+fmt_false = ir.GlobalVariable(module, ir.ArrayType(I8, len(false_str)), name="false_str")
+fmt_false.linkage, fmt_false.global_constant = "private", True
+fmt_false.initializer = ir.Constant(ir.ArrayType(I8, len(false_str)), bytearray(false_str))
+
 TYPES = {
     "i32": I32,
     "i64": I64,
-    "bool": I8,
+    "bool": I1,
 }
 
 KEYWORDS = {
@@ -594,19 +610,15 @@ class CodeGenVisitor:
             err_line = node.stmts[-1].line if node.stmts else node.line
             raise_err(5, err_line, 1)
 
-    def _llvm_type(self, type_name):
-        return TYPES[type_name]
-
-    def _widen(self, val, target_llvm):
-        """Widen i32 -> i64 if needed; types must already be compatible (checked by semantic pass)."""
-        if val.type == target_llvm:
-            return val
-        return self.builder.sext(val, target_llvm)
+    def coerce(self, value, have, want):
+        if have == "i32" and want == "i64":
+            return self.builder.sext(value, I64, name="wide")
+        return value
 
     def visit_decl(self, node):
-        llvm_type = self._llvm_type(node.type_name)
+        llvm_type = TYPES[node.type_name]
         init_val = node.init.accept(self)
-        init_val = self._widen(init_val, llvm_type)
+        init_val = self.coerce(init_val, node.init.type, node.type_name)
         ptr = self.builder.alloca(llvm_type, name=node.name)
         self.builder.store(init_val, ptr)
         self.symbols[node.name] = (ptr, node.mutable)
@@ -614,43 +626,44 @@ class CodeGenVisitor:
     def visit_assign(self, node):
         ptr, _ = self.symbols[node.name]
         val = node.value.accept(self)
-        val = self._widen(val, ptr.type.pointee)
+        val = self.coerce(val, node.value.type, node.decl.type_name)
         self.builder.store(val, ptr)
 
     def visit_exit(self, node):
         val = node.val.accept(self)
-        # GEP to get pointer to format string
-        if val.type != I32:
-            # widen i8 (bool) or i64 to i32 for printf %d
-            if val.type.width < 32:
-                val = self.builder.sext(val, I32)
-            else:
-                val = self.builder.trunc(val, I32)
-        fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-        self.builder.call(self.printf, [fmt_ptr, val])
+        have = node.val.type
+        if have == "bool":
+            true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            str_ptr = self.builder.select(val, true_ptr, false_ptr)
+            fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        else:
+            val = self.coerce(val, have, "i64")
+            fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, val])
         self.builder.ret(ir.Constant(I32, 0))
 
     def visit_binop(self, node):
         left_val = node.left.accept(self)
         right_val = node.right.accept(self)
+        
+        have_l = node.left.type
+        have_r = node.right.type
 
         if node.op in ("==", "!="):
-            if left_val.type != right_val.type:
-                lw, rw = left_val.type.width, right_val.type.width
-                if lw < rw:
-                    left_val = self.builder.sext(left_val, right_val.type)
-                else:
-                    right_val = self.builder.sext(right_val, left_val.type)
+            target = "i64" if (have_l == "i64" or have_r == "i64") else have_l
+            if have_l == "bool": target = "bool"
+            
+            left_val = self.coerce(left_val, have_l, target)
+            right_val = self.coerce(right_val, have_r, target)
             cmp = self.builder.icmp_signed(node.op, left_val, right_val)
-            return self.builder.zext(cmp, I8)  # result is bool (i8)
+            return cmp  # I1
 
-        # arithmetic: widen if needed
-        lw = left_val.type.width
-        rw = right_val.type.width
-        if lw < rw:
-            left_val = self.builder.sext(left_val, right_val.type)
-        elif rw < lw:
-            right_val = self.builder.sext(right_val, left_val.type)
+        # arithmetic
+        target = node.type
+        left_val = self.coerce(left_val, have_l, target)
+        right_val = self.coerce(right_val, have_r, target)
 
         if node.op == "+":
             return self.builder.add(left_val, right_val)
@@ -658,8 +671,6 @@ class CodeGenVisitor:
             return self.builder.sub(left_val, right_val)
         elif node.op == "*":
             return self.builder.mul(left_val, right_val)
-        else:
-            raise_err(8, node.line, node.col)
 
     def visit_var(self, node):
         ptr, _ = self.symbols[node.name]
@@ -670,7 +681,7 @@ class CodeGenVisitor:
         return ir.Constant(llvm_t, int(node.val))
 
     def visit_bool(self, node):
-        return ir.Constant(I8, 1 if node.val else 0)
+        return ir.Constant(I1, 1 if node.val else 0)
 
 
 with open(args.source_path, "rb") as f:

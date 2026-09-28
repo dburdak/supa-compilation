@@ -232,3 +232,71 @@ echo "----------------------------------------"
 echo -e "Passed: ${GREEN}${PASS}${NC}   Failed: ${RED}${FAIL}${NC}"
 
 [ "$FAIL" -eq 0 ]
+
+echo "Running tests in ok/ and err/ (Task 3 format)"
+
+for f in "$TESTS_DIR"/ok/*.txt; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .txt)
+    txt="$f"
+    expected_out="$TESTS_DIR/ok/${name}.expected"
+    
+    if [ ! -f "$expected_out" ]; then continue; fi
+    
+    stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+    exit_code=$?
+    
+    if [ "$exit_code" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: compiler exited with $exit_code"
+        FAIL=$((FAIL + 1))
+        continue
+    fi
+    
+    actual_out=$(execute_ir "$TMP_LL")
+    # For testing, we strip "Program exit with result " prefix to match the bare .expected.
+    # Actually, in Task 3, it says `exit e printing true`. 
+    # If the .expected just says "true", we should match.
+    # The output from execute_ir will be "Program exit with result true"
+    expected_content="$(cat "$expected_out")"
+    if ! echo "$actual_out" | grep -q "$expected_content"; then
+        echo -e "${RED}FAIL${NC} $name: output differs"
+        echo "       expected to contain: $expected_content"
+        echo "       actual:   $actual_out"
+        FAIL=$((FAIL + 1))
+    else
+        echo -e "${GREEN}PASS${NC} ok/$name"
+        PASS=$((PASS + 1))
+    fi
+done
+
+for f in "$TESTS_DIR"/err/*.txt; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .txt)
+    txt="$f"
+    expected_err="$TESTS_DIR/err/${name}.expected"
+    
+    if [ ! -f "$expected_err" ]; then continue; fi
+    
+    actual_err=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1)
+    exit_code=$?
+    
+    if [ "$exit_code" -eq 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: expected error but compilation succeeded"
+        FAIL=$((FAIL + 1))
+        continue
+    fi
+    
+    expected_content="$(cat "$expected_err")"
+    if [ "$actual_err" != "$expected_content" ]; then
+        echo -e "${RED}FAIL${NC} $name: stderr differs"
+        echo "       expected: $expected_content"
+        echo "       actual:   $actual_err"
+        FAIL=$((FAIL + 1))
+    else
+        echo -e "${GREEN}PASS${NC} err/$name"
+        PASS=$((PASS + 1))
+    fi
+done
+
+echo "----------------------------------------"
+echo -e "Total Passed: ${GREEN}${PASS}${NC}   Total Failed: ${RED}${FAIL}${NC}"
