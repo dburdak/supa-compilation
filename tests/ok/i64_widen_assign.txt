@@ -1,0 +1,4 @@
+i64 mut a{10}
+i32 b{5}
+a := b
+exit a

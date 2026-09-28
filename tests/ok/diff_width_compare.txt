@@ -1,0 +1,4 @@
+i64 a{100}
+i32 b{100}
+bool c{a == b}
+exit c

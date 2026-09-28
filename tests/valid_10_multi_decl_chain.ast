@@ -1,9 +1,9 @@
 Program
-  Decl c1 const
+  Decl c1 i32 const
     Const 10
-  Decl c2 const
+  Decl c2 i32 const
     Const 20
-  Decl x mut
+  Decl x i32 mut
     BinOp +
       Var c1
       BinOp *
