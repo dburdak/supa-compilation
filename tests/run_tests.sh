@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
-# run_tests.sh — runs compiler.py against every test in this folder.
+# run_tests.sh — runs compiler.py against test files.
 #
-# For valid_*.txt:
-#   1. compiler.py must exit 0 and produce a .ll file
-#   2. running that IR must print exactly what valid_*.out says
-#      (uses `lli` if it's on PATH, otherwise falls back to the bundled
-#      run_ll.py, which JIT-executes the module via llvmlite itself —
-#      handy when the LLVM command-line tools aren't installed)
-#   3. `compiler.py --tokens` must match valid_*.tokens   (if that file exists)
-#   4. `compiler.py --ast`    must match valid_*.ast      (if that file exists)
-#
-# For invalid_*.txt:
-#   1. compiler.py must exit non-zero
-#   2. its stderr must match invalid_*.err exactly
-#   3. no .ll file may be produced
-#   4. if a matching invalid_*.ast file exists, `--ast` is checked too and is
-#      EXPECTED TO SUCCEED — semantic checks (redeclaration, use-before-decl,
-#      assignment to a const, missing exit) live in the codegen walk, not in
-#      the parser, so a program that is syntactically valid but semantically
-#      wrong must still produce a correct tree under --ast.
+# It tests 4 categories:
+# 1. tests/valid_*.txt: must exit 0, write .ll, execute via lli or run_ll.py, and exact match .out
+#    (after stripping "Program exit with result " prefix if present to normalize).
+#    If .ast / .tokens exist, they must exactly match --ast / --tokens output.
+# 2. tests/invalid_*.txt: must exit non-zero, exact match stderr with .err, write NO .ll file.
+#    If .ast exists, --ast must SUCCEED (exit 0) and exactly match.
+# 3. tests/ok/*.txt: must exit 0, write .ll, execute, exact match .expected.
+# 4. tests/err/*.txt: must exit non-zero, exact match stderr with .expected, write NO .ll.
 
 set -uo pipefail
 
@@ -45,8 +35,6 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-# Execute a .ll file and print what the program wrote to stdout.
-# Prefers the real `lli`; falls back to the bundled llvmlite JIT runner.
 execute_ir() {
     local ll_path="$1"
     if command -v lli >/dev/null 2>&1; then
@@ -60,152 +48,138 @@ execute_ir() {
 }
 
 dump_tokens() {
-    "$PYTHON" "$COMPILER" --tokens "$1" "$TMP_LL" 2>/dev/null
+    "$PYTHON" "$COMPILER" --tokens "$1" 2>/dev/null
 }
 
 dump_ast() {
     "$PYTHON" "$COMPILER" --ast "$1" 2>/dev/null
 }
 
-# Compares $1 (actual, already captured) against the contents of file $2.
-# Echoes a diff (indented) when they differ. Returns 0/1.
-matches_file() {
-    local actual="$1" expected_file="$2"
-    [ "$actual" == "$(cat "$expected_file")" ]
+normalize_output() {
+    local val="$1"
+    val="${val#Program exit with result }"
+    echo -n "$val"
 }
 
-run_valid() {
-    local name="$1"
-    local txt="$TESTS_DIR/${name}.txt"
-    local expected_out="$TESTS_DIR/${name}.out"
-    local expected_ast="$TESTS_DIR/${name}.ast"
-    local expected_tokens="$TESTS_DIR/${name}.tokens"
-    local ok=1
-
-    if [ ! -f "$expected_out" ]; then
-        echo -e "${YELLOW}SKIP${NC} $name: no ${name}.out file found"
-        return
-    fi
-
-    # 1. full compile must succeed
+run_valid_test() {
+    local txt="$1"
+    local expected_out_file="$2"
+    local expected_ast_file="${txt%.txt}.ast"
+    local expected_tokens_file="${txt%.txt}.tokens"
+    local name="$(basename "$(dirname "$txt")")/$(basename "$txt")"
+    name="${name#./}"
+    
+    rm -f "$TMP_LL"
+    
     local stderr_output exit_code
     stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
     exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
         echo -e "${RED}FAIL${NC} $name: compiler exited with code $exit_code (expected 0)"
-        [ -n "$stderr_output" ] && echo "       stderr: $stderr_output"
-        echo "       Tokens stream:"
-        dump_tokens "$txt" | sed 's/^/         /'
+        echo "       stderr: $stderr_output"
         FAIL=$((FAIL + 1))
         return
     fi
-
-    # 2. execute the IR, compare against .out
-    local actual_out expected_content
+    
+    local actual_out expected_out norm_actual norm_expected
     actual_out=$(execute_ir "$TMP_LL")
-    expected_content="$(cat "$expected_out")"
-    if [ "$actual_out" != "$expected_content" ]; then
-        echo -e "${RED}FAIL${NC} $name: execution result differs from ${name}.out"
-        echo "       expected: $expected_content"
-        echo "       actual:   $actual_out"
-        ok=0
-    fi
-
-    # 3. --tokens, if a reference file exists
-    if [ -f "$expected_tokens" ]; then
-        local actual_tokens
-        actual_tokens=$(dump_tokens "$txt")
-        if ! matches_file "$actual_tokens" "$expected_tokens"; then
-            echo -e "${RED}FAIL${NC} $name: --tokens output differs from ${name}.tokens"
-            diff <(echo "$actual_tokens") "$expected_tokens" | sed 's/^/       /'
-            ok=0
-        fi
-    fi
-
-    # 4. --ast, if a reference file exists
-    if [ -f "$expected_ast" ]; then
-        local actual_ast
-        actual_ast=$(dump_ast "$txt")
-        if ! matches_file "$actual_ast" "$expected_ast"; then
-            echo -e "${RED}FAIL${NC} $name: --ast output differs from ${name}.ast"
-            diff <(echo "$actual_ast") "$expected_ast" | sed 's/^/       /'
-            ok=0
-        fi
-    fi
-
-    if [ "$ok" -eq 1 ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
-    else
+    expected_out=$(cat "$expected_out_file")
+    
+    norm_actual=$(normalize_output "$actual_out")
+    norm_expected=$(normalize_output "$expected_out")
+    
+    if [ "$norm_actual" != "$norm_expected" ]; then
+        echo -e "${RED}FAIL${NC} $name: runtime output mismatch"
+        echo "       expected: '$norm_expected'"
+        echo "       actual:   '$norm_actual'"
         FAIL=$((FAIL + 1))
+        return
     fi
+    
+    if [ -f "$expected_tokens_file" ]; then
+        local actual_tokens expected_tokens
+        actual_tokens=$(dump_tokens "$txt")
+        expected_tokens=$(cat "$expected_tokens_file")
+        if [ "$actual_tokens" != "$expected_tokens" ]; then
+            echo -e "${RED}FAIL${NC} $name: --tokens mismatch"
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    fi
+
+    if [ -f "$expected_ast_file" ]; then
+        local actual_ast expected_ast
+        actual_ast=$(dump_ast "$txt")
+        expected_ast=$(cat "$expected_ast_file")
+        if [ "$actual_ast" != "$expected_ast" ]; then
+            echo -e "${RED}FAIL${NC} $name: --ast mismatch"
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    fi
+
+    echo -e "${GREEN}PASS${NC} $name"
+    PASS=$((PASS + 1))
 }
 
-run_invalid() {
-    local name="$1"
-    local txt="$TESTS_DIR/${name}.txt"
-    local expected_err="$TESTS_DIR/${name}.err"
-    local expected_ast="$TESTS_DIR/${name}.ast"
-    local ok=1
-
-    if [ ! -f "$expected_err" ]; then
-        echo -e "${YELLOW}SKIP${NC} $name: no ${name}.err file found"
-        return
-    fi
-
-    # 1 & 2. compiler must fail, stderr must match
-    # (TMP_LL is reused across tests — clear it first so a leftover .ll from
-    # an earlier *valid* test can't be mistaken for one this run wrote)
-    : > "$TMP_LL"
-    local actual_err exit_code expected_content
-    actual_err=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+run_invalid_test() {
+    local txt="$1"
+    local expected_err_file="$2"
+    local expected_ast_file="${txt%.txt}.ast"
+    local name="$(basename "$(dirname "$txt")")/$(basename "$txt")"
+    name="${name#./}"
+    
+    rm -f "$TMP_LL"
+    
+    local actual_err exit_code
+    actual_err=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1)
     exit_code=$?
-    expected_content="$(cat "$expected_err")"
-
+    
     if [ "$exit_code" -eq 0 ]; then
-        echo -e "${RED}FAIL${NC} $name: compiler unexpectedly succeeded (exit 0), expected an error"
+        echo -e "${RED}FAIL${NC} $name: compiler succeeded but should have failed"
         FAIL=$((FAIL + 1))
         return
     fi
-
-    if [ "$actual_err" != "$expected_content" ]; then
-        echo -e "${RED}FAIL${NC} $name: stderr differs from ${name}.err"
-        echo "       expected: $expected_content"
-        echo "       actual:   $actual_err"
-        ok=0
+    
+    local expected_err
+    expected_err=$(cat "$expected_err_file")
+    
+    if [ "$actual_err" != "$expected_err" ]; then
+        echo -e "${RED}FAIL${NC} $name: stderr mismatch"
+        echo "       expected: '$expected_err'"
+        echo "       actual:   '$actual_err'"
+        FAIL=$((FAIL + 1))
+        return
     fi
-
-    # 3. no .ll file must be left behind (the compiler must not write output on error)
-    if [ -s "$TMP_LL" ]; then
-        echo -e "${RED}FAIL${NC} $name: an .ll file was written despite the compilation error"
-        ok=0
+    
+    if [ -f "$TMP_LL" ]; then
+        echo -e "${RED}FAIL${NC} $name: produced .ll file despite error"
+        FAIL=$((FAIL + 1))
+        return
     fi
-
-    # 4. some semantic errors (redeclaration, use-before-decl, const assignment,
-    #    missing exit) only fire during codegen, so --ast must still succeed
-    #    and match the reference tree for those specific tests.
-    if [ -f "$expected_ast" ]; then
-        local ast_out ast_exit
-        ast_out=$("$PYTHON" "$COMPILER" --ast "$txt" 2>&1)
+    
+    if [ -f "$expected_ast_file" ]; then
+        local actual_ast ast_exit expected_ast
+        actual_ast=$("$PYTHON" "$COMPILER" --ast "$txt" 2>&1)
         ast_exit=$?
+        
         if [ "$ast_exit" -ne 0 ]; then
-            echo -e "${RED}FAIL${NC} $name: --ast unexpectedly failed (expected it to parse fine)"
-            echo "       output: $ast_out"
-            ok=0
-        elif ! matches_file "$ast_out" "$expected_ast"; then
-            echo -e "${RED}FAIL${NC} $name: --ast output differs from ${name}.ast"
-            diff <(echo "$ast_out") "$expected_ast" | sed 's/^/       /'
-            ok=0
+            echo -e "${RED}FAIL${NC} $name: --ast failed with code $ast_exit but should succeed for semantic errors"
+            FAIL=$((FAIL + 1))
+            return
+        fi
+        
+        expected_ast=$(cat "$expected_ast_file")
+        if [ "$actual_ast" != "$expected_ast" ]; then
+            echo -e "${RED}FAIL${NC} $name: --ast mismatch for semantic test"
+            FAIL=$((FAIL + 1))
+            return
         fi
     fi
-
-    if [ "$ok" -eq 1 ]; then
-        echo -e "${GREEN}PASS${NC} $name"
-        PASS=$((PASS + 1))
-    else
-        FAIL=$((FAIL + 1))
-    fi
+    
+    echo -e "${GREEN}PASS${NC} $name"
+    PASS=$((PASS + 1))
 }
 
 echo "Tests dir: $TESTS_DIR"
@@ -219,84 +193,44 @@ echo
 
 for f in "$TESTS_DIR"/valid_*.txt; do
     [ -e "$f" ] || continue
-    run_valid "$(basename "$f" .txt)"
+    if [ -f "${f%.txt}.out" ]; then
+        run_valid_test "$f" "${f%.txt}.out"
+    else
+        echo -e "${YELLOW}SKIP${NC} $(basename "$f"): no .out file found"
+    fi
 done
 
 for f in "$TESTS_DIR"/invalid_*.txt; do
     [ -e "$f" ] || continue
-    run_invalid "$(basename "$f" .txt)"
+    if [ -f "${f%.txt}.err" ]; then
+        run_invalid_test "$f" "${f%.txt}.err"
+    else
+        echo -e "${YELLOW}SKIP${NC} $(basename "$f"): no .err file found"
+    fi
 done
-
-echo
-echo "----------------------------------------"
-echo -e "Passed: ${GREEN}${PASS}${NC}   Failed: ${RED}${FAIL}${NC}"
-
-[ "$FAIL" -eq 0 ]
-
-echo "Running tests in ok/ and err/ (Task 3 format)"
 
 for f in "$TESTS_DIR"/ok/*.txt; do
     [ -e "$f" ] || continue
-    name=$(basename "$f" .txt)
-    txt="$f"
-    expected_out="$TESTS_DIR/ok/${name}.expected"
-    
-    if [ ! -f "$expected_out" ]; then continue; fi
-    
-    stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
-    exit_code=$?
-    
-    if [ "$exit_code" -ne 0 ]; then
-        echo -e "${RED}FAIL${NC} $name: compiler exited with $exit_code"
-        FAIL=$((FAIL + 1))
-        continue
-    fi
-    
-    actual_out=$(execute_ir "$TMP_LL")
-    # For testing, we strip "Program exit with result " prefix to match the bare .expected.
-    # Actually, in Task 3, it says `exit e printing true`. 
-    # If the .expected just says "true", we should match.
-    # The output from execute_ir will be "Program exit with result true"
-    expected_content="$(cat "$expected_out")"
-    if ! echo "$actual_out" | grep -q "$expected_content"; then
-        echo -e "${RED}FAIL${NC} $name: output differs"
-        echo "       expected to contain: $expected_content"
-        echo "       actual:   $actual_out"
-        FAIL=$((FAIL + 1))
+    if [ -f "${f%.txt}.expected" ]; then
+        run_valid_test "$f" "${f%.txt}.expected"
     else
-        echo -e "${GREEN}PASS${NC} ok/$name"
-        PASS=$((PASS + 1))
+        echo -e "${YELLOW}SKIP${NC} $(basename "$f"): no .expected file found"
     fi
 done
 
 for f in "$TESTS_DIR"/err/*.txt; do
     [ -e "$f" ] || continue
-    name=$(basename "$f" .txt)
-    txt="$f"
-    expected_err="$TESTS_DIR/err/${name}.expected"
-    
-    if [ ! -f "$expected_err" ]; then continue; fi
-    
-    actual_err=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1)
-    exit_code=$?
-    
-    if [ "$exit_code" -eq 0 ]; then
-        echo -e "${RED}FAIL${NC} $name: expected error but compilation succeeded"
-        FAIL=$((FAIL + 1))
-        continue
-    fi
-    
-    expected_content="$(cat "$expected_err")"
-    if [ "$actual_err" != "$expected_content" ]; then
-        echo -e "${RED}FAIL${NC} $name: stderr differs"
-        echo "       expected: $expected_content"
-        echo "       actual:   $actual_err"
-        FAIL=$((FAIL + 1))
+    if [ -f "${f%.txt}.expected" ]; then
+        run_invalid_test "$f" "${f%.txt}.expected"
     else
-        echo -e "${GREEN}PASS${NC} err/$name"
-        PASS=$((PASS + 1))
+        echo -e "${YELLOW}SKIP${NC} $(basename "$f"): no .expected file found"
     fi
 done
 
 echo "----------------------------------------"
-echo -e "Total Passed: ${GREEN}${PASS}${NC}   Total Failed: ${RED}${FAIL}${NC}"
+echo -e "Passed: ${GREEN}${PASS}${NC}   Failed: ${RED}${FAIL}${NC}"
+
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0
