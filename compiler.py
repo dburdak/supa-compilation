@@ -475,6 +475,108 @@ class Parser:
                 raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
 
 
+class SemanticChecker:
+    def __init__(self):
+        self.symbols = {}  # name -> DeclNode
+
+    def _sem_err(self, line, col, msg):
+        sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
+        sys.exit(15)
+
+    def _check_assignable(self, expr, want_type, at_node, what):
+        """Verify expr.type can go into a variable of want_type."""
+        have = expr.type
+        if have == want_type:
+            return
+        if have == "i32" and want_type == "i64":
+            return  # only widening allowed
+        # constant that is too large for the declared integer type
+        if isinstance(expr, ConstNode) and want_type in ("i32", "i64"):
+            self._sem_err(expr.line, expr.col,
+                          f"constant {expr.val} does not fit in {want_type}")
+        self._sem_err(at_node.line, at_node.col,
+                      f"cannot {what} of type {want_type} with a value of type {have}")
+
+
+    def visit_program(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit:
+            node.exit.accept(self)
+
+    def visit_decl(self, node):
+        if node.name in self.symbols:
+            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
+        node.init.accept(self)  # resolve before the name enters scope
+        self._check_assignable(node.init, node.type_name, node,
+                               f"initialise '{node.name}'")
+        self.symbols[node.name] = node
+
+    def visit_assign(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+        decl = self.symbols[node.name]
+        node.decl = decl
+        if not decl.mutable:
+            raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")
+        node.value.accept(self)
+        self._check_assignable(node.value, decl.type_name, node,
+                               f"assign to '{node.name}'")
+
+    def visit_exit(self, node):
+        node.val.accept(self)
+        # exit accepts integer or bool; any declared type is fine here
+
+    def visit_binop(self, node):
+        lt = node.left.accept(self)
+        rt = node.right.accept(self)
+
+        if node.op in ("+", "-", "*"):
+            # arithmetic: both must be integers
+            if lt == "bool":
+                self._sem_err(node.line, node.col,
+                              f"cannot apply '{node.op}' to bool")
+            if rt == "bool":
+                self._sem_err(node.line, node.col,
+                              f"cannot apply '{node.op}' to bool")
+            # result is the wider type
+            node.type = "i64" if (lt == "i64" or rt == "i64") else "i32"
+        else:  # == or !=
+            # both must be integers (any mix) or both bools
+            both_bool = (lt == "bool" and rt == "bool")
+            both_int  = (lt in ("i32", "i64") and rt in ("i32", "i64"))
+            if not (both_bool or both_int):
+                self._sem_err(node.line, node.col,
+                              f"cannot compare {lt} with {rt}")
+            node.type = "bool"
+
+        return node.type
+
+    def visit_var(self, node):
+        if node.name not in self.symbols:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+        node.decl = self.symbols[node.name]
+        node.type = node.decl.type_name
+        return node.type
+
+    def visit_const(self, node):
+        val = int(node.val)
+        I32_MAX = 2**31 - 1
+        I64_MAX = 2**63 - 1
+        if val <= I32_MAX:
+            node.type = "i32"
+        elif val <= I64_MAX:
+            node.type = "i64"
+        else:
+            self._sem_err(node.line, node.col,
+                          f"constant {node.val} does not fit in i64")
+        return node.type
+
+    def visit_bool(self, node):
+        node.type = "bool"
+        return node.type
+
+
 class CodeGenVisitor:
     def __init__(self, builder, printf_func, fmt_global):
         self.builder = builder
@@ -492,42 +594,27 @@ class CodeGenVisitor:
             err_line = node.stmts[-1].line if node.stmts else node.line
             raise_err(5, err_line, 1)
 
-    def _coerce(self, val, target_type, line, col):
-        if val.type == target_type:
+    def _llvm_type(self, type_name):
+        return TYPES[type_name]
+
+    def _widen(self, val, target_llvm):
+        """Widen i32 -> i64 if needed; types must already be compatible (checked by semantic pass)."""
+        if val.type == target_llvm:
             return val
-        src_bits = val.type.width
-        dst_bits = target_type.width
-        # i32 -> i64 is allowed; everything else is a type error
-        if src_bits == 32 and dst_bits == 64:
-            return self.builder.sext(val, target_type)
-        raise_err(11, line, col, ue_part=f"type mismatch")
+        return self.builder.sext(val, target_llvm)
 
     def visit_decl(self, node):
-        if node.name in self.symbols:
-            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
-
-        llvm_type = TYPES.get(node.type_name)
-        if llvm_type is None:
-            raise_err(11, node.line, node.col, ue_part=f"'{node.type_name}'")
-
+        llvm_type = self._llvm_type(node.type_name)
         init_val = node.init.accept(self)
-        init_val = self._coerce(init_val, llvm_type, node.line, node.col)
-
+        init_val = self._widen(init_val, llvm_type)
         ptr = self.builder.alloca(llvm_type, name=node.name)
         self.builder.store(init_val, ptr)
         self.symbols[node.name] = (ptr, node.mutable)
 
     def visit_assign(self, node):
-        if node.name not in self.symbols:
-            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")  # undeclared variable
-        
-        ptr, is_mutable = self.symbols[node.name]
-        if not is_mutable:
-            raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")  # cannot assign to const
-
+        ptr, _ = self.symbols[node.name]
         val = node.value.accept(self)
-        ptr_type = ptr.type.pointee
-        val = self._coerce(val, ptr_type, node.line, node.col)
+        val = self._widen(val, ptr.type.pointee)
         self.builder.store(val, ptr)
 
     def visit_exit(self, node):
@@ -548,9 +635,7 @@ class CodeGenVisitor:
         right_val = node.right.accept(self)
 
         if node.op in ("==", "!="):
-            # operands must be same type (both int or both bool)
             if left_val.type != right_val.type:
-                # allow i32 == i64: widen the narrower side
                 lw, rw = left_val.type.width, right_val.type.width
                 if lw < rw:
                     left_val = self.builder.sext(left_val, right_val.type)
@@ -559,7 +644,7 @@ class CodeGenVisitor:
             cmp = self.builder.icmp_signed(node.op, left_val, right_val)
             return self.builder.zext(cmp, I8)  # result is bool (i8)
 
-        # arithmetic: both operands must be integers (i32 or i64), widen if needed
+        # arithmetic: widen if needed
         lw = left_val.type.width
         rw = right_val.type.width
         if lw < rw:
@@ -577,14 +662,12 @@ class CodeGenVisitor:
             raise_err(8, node.line, node.col)
 
     def visit_var(self, node):
-        if node.name not in self.symbols:
-            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")  # undeclared variable
-        
         ptr, _ = self.symbols[node.name]
         return self.builder.load(ptr, name=node.name)
 
     def visit_const(self, node):
-        return ir.Constant(I32, int(node.val))
+        llvm_t = TYPES[node.type]
+        return ir.Constant(llvm_t, int(node.val))
 
     def visit_bool(self, node):
         return ir.Constant(I8, 1 if node.val else 0)
@@ -607,6 +690,9 @@ ast = parser_obj.parse_program()
 if args.ast:
     ast.dump()
     sys.exit(0)
+
+checker = SemanticChecker()
+ast.accept(checker)
 
 codegen = CodeGenVisitor(builder, printf, fmt)
 ast.accept(codegen)
