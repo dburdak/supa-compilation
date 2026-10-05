@@ -1,0 +1,7 @@
+bool cond{true}
+if cond
+{
+i32 x{1}
+i32 x{2}
+}
+exit 0

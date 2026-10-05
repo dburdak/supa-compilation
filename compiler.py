@@ -129,8 +129,9 @@ def lex(data: bytes):
             elif b in (32, 9):
                 pass
             elif b == 10:
-                lexer_lines.append(tokens)
-                tokens = []
+                if tokens:
+                    lexer_lines.append(tokens)
+                    tokens = []
                 line += 1; col = 0
             elif is_alpha(b):
                 state, start, start_col = "IDENT", i, col
