@@ -630,7 +630,13 @@ class Parser:
 
 class SemanticChecker:
     def __init__(self):
-        self.symbols = {}  # name -> DeclNode
+        self.scopes = [{}]  # stack of frames (dicts): name -> DeclNode
+
+    def lookup(self, node, name):
+        for frame in reversed(self.scopes):
+            if name in frame:
+                return frame[name]
+        raise_err(2, node.line, node.col, ue_part=f"'{name}'")
 
     def _sem_err(self, line, col, msg):
         sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
@@ -652,23 +658,23 @@ class SemanticChecker:
 
 
     def visit_program(self, node):
+        self.scopes = [{}]
         for stmt in node.stmts:
             stmt.accept(self)
         if node.exit:
             node.exit.accept(self)
 
     def visit_decl(self, node):
-        if node.name in self.symbols:
+        top_frame = self.scopes[-1]
+        if node.name in top_frame:
             raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
         node.init.accept(self)  # resolve before the name enters scope
         self._check_assignable(node.init, node.type_name, node,
                                f"initialise '{node.name}'")
-        self.symbols[node.name] = node
+        top_frame[node.name] = node
 
     def visit_assign(self, node):
-        if node.name not in self.symbols:
-            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
-        decl = self.symbols[node.name]
+        decl = self.lookup(node, node.name)
         node.decl = decl
         if not decl.mutable:
             raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")
@@ -690,18 +696,17 @@ class SemanticChecker:
             node.else_block.accept(self)
 
     def visit_block(self, node):
-        # Blocks have their own scope: save and restore the symbol table.
-        saved = dict(self.symbols)
+        self.scopes.append({})
         for stmt in node.stmts:
             stmt.accept(self)
         if node.exit:
             node.exit.accept(self)
-        self.symbols = saved
+        self.scopes.pop()
 
     def visit_not(self, node):
         t = node.operand.accept(self)
         if t != "bool":
-            self._sem_err(node.line, node.col+1,
+            self._sem_err(node.line, node.col,
                           f"'!' requires bool operand, got {t}")
         node.type = "bool"
         return node.type
@@ -732,10 +737,9 @@ class SemanticChecker:
         return node.type
 
     def visit_var(self, node):
-        if node.name not in self.symbols:
-            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
-        node.decl = self.symbols[node.name]
-        node.type = node.decl.type_name
+        decl = self.lookup(node, node.name)
+        node.decl = decl
+        node.type = decl.type_name
         return node.type
 
     def visit_const(self, node):
