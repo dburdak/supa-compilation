@@ -434,7 +434,7 @@ class Parser:
             self.next_line()
             tok = self.peek()
 
-            if tok.kind == "statement" and tok.text == "exit":
+            if tok is not None and tok.kind == "statement" and tok.text == "exit":
                 exit_node = self.parse_exit()
                 self.expect_eol()
                 has_exit = True
@@ -496,7 +496,7 @@ class Parser:
 
     def parse_exit(self):
         exit_tok = self.eat()  # "exit"
-        val = self.parse_factor(is_exit=True)
+        val = self.parse_operand(is_exit=True)
         return ExitNode(exit_tok.line, exit_tok.col, val)
 
     def parse_arith(self):
@@ -509,10 +509,10 @@ class Parser:
 
     def parse_term(self):
         # term ::= factor { "*" factor }
-        node = self.parse_factor()
+        node = self.parse_operand()
         while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*":
             op_tok = self.eat()
-            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_factor())
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
         return node
 
     def parse_expr(self):
@@ -526,8 +526,8 @@ class Parser:
             return BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, right)
         return node
 
-    def parse_factor(self, is_exit=False):
-        # factor ::= "!" factor | number | "true" | "false" | ident
+    def parse_operand(self, is_exit=False):
+        # operand ::= ident | constant | "true" | "false"
         tok = self.peek()
 
         if tok is None:
@@ -535,11 +535,11 @@ class Parser:
             if is_exit:
                 raise_err(7, line, col)
             else:
-                raise_syntax_err(line, col, "expected expression, found end of line")
+                raise_syntax_err(line, col, "expected constant or variable, found end of line")
 
         if tok.kind == "operator" and tok.text == "!":
             bang = self.eat()
-            operand = self.parse_factor(is_exit=is_exit)
+            operand = self.parse_operand(is_exit=is_exit)
             return NotNode(bang.line, bang.col, operand)
         elif tok.kind == "ident":
             self.eat()
@@ -554,8 +554,7 @@ class Parser:
             if is_exit:
                 raise_err(7, tok.line, tok.col)
             else:
-                raise_syntax_err(tok.line, tok.col, f"expected expression, got '{tok.text}'")
-
+                raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
     def parse_if(self):
         # if ::= "if" expr NL block [ "else" NL block ]
         if_tok = self.eat()  # 'if'
