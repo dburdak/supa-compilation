@@ -701,7 +701,7 @@ class SemanticChecker:
     def visit_not(self, node):
         t = node.operand.accept(self)
         if t != "bool":
-            self._sem_err(node.line, node.col,
+            self._sem_err(node.line, node.col+1,
                           f"'!' requires bool operand, got {t}")
         node.type = "bool"
         return node.type
