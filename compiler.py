@@ -598,7 +598,7 @@ class CodeGenVisitor:
         self.builder = builder
         self.printf = printf_func
         self.fmt_global = fmt_global
-        # Symbol table: name -> (alloca_ptr, is_mutable)
+        # Symbol table: decl node -> alloca_ptr
         self.symbols = {}
 
     def visit_program(self, node):
@@ -606,9 +606,6 @@ class CodeGenVisitor:
             stmt.accept(self)
         if node.exit:
             node.exit.accept(self)
-        else:
-            err_line = node.stmts[-1].line if node.stmts else node.line
-            raise_err(5, err_line, 1)
 
     def coerce(self, value, have, want):
         if have == "i32" and want == "i64":
@@ -621,10 +618,10 @@ class CodeGenVisitor:
         init_val = self.coerce(init_val, node.init.type, node.type_name)
         ptr = self.builder.alloca(llvm_type, name=node.name)
         self.builder.store(init_val, ptr)
-        self.symbols[node.name] = (ptr, node.mutable)
+        self.symbols[node] = ptr
 
     def visit_assign(self, node):
-        ptr, _ = self.symbols[node.name]
+        ptr = self.symbols[node.decl]
         val = node.value.accept(self)
         val = self.coerce(val, node.value.type, node.decl.type_name)
         self.builder.store(val, ptr)
@@ -673,7 +670,7 @@ class CodeGenVisitor:
             return self.builder.mul(left_val, right_val)
 
     def visit_var(self, node):
-        ptr, _ = self.symbols[node.name]
+        ptr = self.symbols[node.decl]
         return self.builder.load(ptr, name=node.name)
 
     def visit_const(self, node):
@@ -684,8 +681,12 @@ class CodeGenVisitor:
         return ir.Constant(I1, 1 if node.val else 0)
 
 
-with open(args.source_path, "rb") as f: # TO HANDLE MISSING INPUT FILE
-    file_bytes = f.read()
+try:
+    with open(args.source_path, "rb") as f:
+        file_bytes = f.read()
+except FileNotFoundError:
+    sys.stderr.write(f"error: file not found: {args.source_path}\n")
+    sys.exit(1)
 
 lines = lex(file_bytes)
 
