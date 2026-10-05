@@ -57,6 +57,7 @@ KEYWORDS = {
     "exit": "statement",
     "if": "keyword",
     "else": "keyword",
+    "while": "keyword",
 }
 
 def raise_err(error_number, err_line, column, ue_part=""):
@@ -356,6 +357,21 @@ class IfNode(StmtNode):
         return visitor.visit_if(self)
 
 
+class WhileNode(StmtNode):
+    def __init__(self, line, col, condition, body_block):
+        self.line, self.col = line, col
+        self.condition = condition
+        self.body_block = body_block
+
+    def dump(self, indent=0):
+        print(" " * indent + "While")
+        self.condition.dump(indent + 2)
+        self.body_block.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_while(self)
+
+
 class ExitNode(Node):
     def __init__(self, line, col, val):
         self.line, self.col, self.val = line, col, val
@@ -465,7 +481,7 @@ class Parser:
                 stmts.append(stmt_node)
                 # if/block statements already consumed all their lines;
                 # single-line statements: check nothing is left
-                if not isinstance(stmt_node, IfNode):
+                if not isinstance(stmt_node, (IfNode, WhileNode)):
                     self.expect_eol()
                 if guarantees_exit(stmt_node):
                     has_exit = True
@@ -490,6 +506,8 @@ class Parser:
             return self.parse_assignment()
         elif tok.kind == "keyword" and tok.text == "if":
             return self.parse_if()
+        elif tok.kind == "keyword" and tok.text == "while":
+            return self.parse_while()
         else:
             raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'")
 
@@ -598,6 +616,14 @@ class Parser:
 
         return IfNode(if_tok.line, if_tok.col, condition, then_block, else_block)
 
+    def parse_while(self):
+        # while ::= "while" expr NL block
+        while_tok = self.eat()  # 'while'
+        condition = self.parse_expr()
+        self.expect_eol()       # nothing after the condition on that line
+        body_block = self.parse_block()
+        return WhileNode(while_tok.line, while_tok.col, condition, body_block)
+
     def parse_block(self):
         # block ::= "{" NL { statement } [ exit NL ] "}" NL
         # The '{' must be on its own line (the line after 'if'/'else').
@@ -637,7 +663,7 @@ class Parser:
                     raise_err(6, tok.line, tok.col)
                 stmt = self.parse_statement()
                 stmts.append(stmt)
-                if not isinstance(stmt, IfNode):
+                if not isinstance(stmt, (IfNode, WhileNode)):
                     self.expect_eol()
                 if guarantees_exit(stmt):
                     has_exit = True
@@ -719,6 +745,13 @@ class SemanticChecker:
         node.then_block.accept(self)
         if node.else_block:
             node.else_block.accept(self)
+
+    def visit_while(self, node):
+        cond_type = node.condition.accept(self)
+        if cond_type != "bool":
+            self._sem_err(node.line, node.col,
+                          f"while condition must be bool, got {cond_type}")
+        node.body_block.accept(self)
 
     def visit_block(self, node):
         self.scopes.append({})
@@ -874,6 +907,27 @@ class CodeGenVisitor:
                 self.builder.branch(merge_bb)
 
         self.builder.position_at_end(merge_bb)
+
+    def visit_while(self, node):
+        cond_bb = self.builder.function.append_basic_block("while_cond")
+        body_bb = self.builder.function.append_basic_block("while_body")
+        end_bb  = self.builder.function.append_basic_block("while_end")
+
+        self.builder.branch(cond_bb)
+
+        # condition block
+        self.builder.position_at_end(cond_bb)
+        cond_val = node.condition.accept(self)
+        self.builder.cbranch(cond_val, body_bb, end_bb)
+
+        # body block
+        self.builder.position_at_end(body_bb)
+        node.body_block.accept(self)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(cond_bb)
+
+        # end block
+        self.builder.position_at_end(end_bb)
 
     def visit_block(self, node):
         for stmt in node.stmts:
