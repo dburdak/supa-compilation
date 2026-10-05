@@ -72,7 +72,7 @@ def raise_err(error_number, err_line, column, ue_part=""):
         11: "unknown type",
         12: "cannot assign to immutable variable",
         13: "expected '==' (a single '=' is not an operator)",
-        14: "expected '==' (a single '!' is not an operator)",
+        14: "expected '!=' (a single '!' is not an operator)",
     }
 
     msg = ERRORS.get(error_number, "unknown compilation error")
@@ -684,7 +684,7 @@ class CodeGenVisitor:
         return ir.Constant(I1, 1 if node.val else 0)
 
 
-with open(args.source_path, "rb") as f:
+with open(args.source_path, "rb") as f: # TO HANDLE MISSING INPUT FILE
     file_bytes = f.read()
 
 lines = lex(file_bytes)

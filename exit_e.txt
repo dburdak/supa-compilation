@@ -1,3 +1,0 @@
-bool mut e{false}
-e := true
-exit e
