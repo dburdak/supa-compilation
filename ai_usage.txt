@@ -292,3 +292,6 @@ Program exit with result 1
 Згенерований IR повинен виконуватися за допомогою lli output.ll.
 Результат у stdout повинен збігатися з вмістом відповідного .expected файлу.
 
+User prompt: чому ці тести не проходять і падають з дивною для мене помилкою: FAIL tests/valid_11_blank_lines_underscore.txt: compiler exited with code 13 (expected 0) stderr: compilation error: line 1:1: expected statement, found end of line ... FAIL tests/valid_5_spaces.txt: compiler exited with code 13 (expected 0)
+Response: У лексері при b == 10 порожні рядки створювали порожні списки [] у lexer_lines, які парсер намагався розпарсити як інструкцію. 
+

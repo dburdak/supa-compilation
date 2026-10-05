@@ -2,6 +2,16 @@
 
 A custom educational compiler for the "Supa" programming language, written in Python with `llvmlite`.
 
+## Practice 5 Features (Control Flow & Scopes)
+
+This version adds support for control flow constructs and block scoping:
+- **`if` and `else` statements**: Conditional branching with multi-line blocks `{ ... }`.
+- **`while` loops**: Loop construct with condition evaluation and back-edge branching.
+- **Unary `!` operator**: Logical NOT for `bool` operands.
+- **Block scopes (Stack of Frames)**: Scopes are managed using a stack of frames (`self.scopes`). Variables can be shadowed in inner blocks with any type.
+- **Basic Blocks in LLVM IR**: Conditionals and loops generate LLVM basic blocks (`then`, `else`, `merge`, `while_cond`, `while_body`, `while_end`).
+- **Entry-Block Allocas**: All variable declarations emit `alloca` instructions exclusively in the entry basic block (`alloca_in_entry`), enabling LLVM `mem2reg` optimization.
+
 ## Requirements
 
 - Python 3.x
@@ -15,15 +25,16 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
 .
 ├── compiler.py               # The main compiler (Lexer -> Parser -> SemanticChecker -> CodeGenVisitor)
 ├── grammar.ebnf              # EBNF grammar reference
+├── ai_usage.txt              # AI interaction log
 └── tests/                    # Test suite containing 4 main sets of tests
     ├── run_tests.sh          # Bash script to run all autotests
     ├── run_ll.py             # llvmlite JIT fallback execution script
     ├── valid_*.txt           # Valid programs (compiled and executed)
     ├── invalid_*.txt         # Invalid programs (should produce stderr, no .ll)
-    ├── ok/                   # Task 3 valid programs
-    │   └── *.txt             # Valid programs testing widening/types
-    └── err/                  # Task 3 invalid programs
-        └── *.txt             # Invalid programs testing type narrowing/operations
+    ├── ok/                   # Practice 4 & 5 valid programs
+    │   └── *.txt             # Valid programs testing widening, scopes, if/else, while
+    └── err/                  # Practice 4 & 5 invalid programs
+        └── *.txt             # Invalid programs testing semantic/type errors
 ```
 
 *Note: Alongside `valid_*.txt` files, there may be `.out`, `.ast`, and `.tokens` reference files. Alongside `invalid_*.txt` files, there are `.err` files, and occasionally `.ast` files for programs that are syntactically valid but semantically invalid.*
@@ -44,83 +55,54 @@ The AST dump uses indentation to represent the tree structure (each level adds 2
 - `Program` -> children: statements, then `Exit`
 - `Decl {name} {type} {mut|const}` -> child: initialization expression
 - `Assign {name}` -> child: value expression
+- `If` -> children: condition expression, then_block, optional else_block
+- `Block` -> children: statements, optional exit
+- `While` -> children: condition expression, body_block
 - `BinOp {op}` -> children: left expression, right expression
+- `Not` -> child: operand expression
 - `Var {name}`
 - `Const {val}`
 - `Bool {true|false}`
 - `Exit` -> child: value expression
 
 ### The Difference Between `--ast` and Full Compilation
-When running with `--ast`, the program only executes the Lexer and the Parser. It does not run the `SemanticChecker` or the `CodeGenVisitor`. Therefore, any semantic errors (such as using an undeclared variable, assigning to a constant, or invalid type operations) will **not** be caught with `--ast`, and the command will succeed (exit 0) and print the parsed tree.
+When running with `--ast`, the program only executes the Lexer and the Parser. It does not run the `SemanticChecker` or the `CodeGenVisitor`. Therefore, any semantic errors (such as using an undeclared variable, assigning to a constant, invalid type operations, or non-bool conditions) will **not** be caught with `--ast`, and the command will succeed (exit 0) and print the parsed tree.
 
-For example, `tests/invalid_4_use_before_decl.txt` is syntactically perfectly valid, but uses a variable before it is declared. Running `python compiler.py tests/invalid_4_use_before_decl.txt --ast` succeeds, which is verified by `tests/invalid_4_use_before_decl.ast`. However, a full compilation fails in the `SemanticChecker`.
+## Scopes and Frame Stack
 
-*Note: The "missing exit statement" check (Error 5) is implemented in both the `Parser` and `CodeGenVisitor`. In practice, the Parser catches it first.*
+The `SemanticChecker` maintains `self.scopes = [{}]`, representing a stack of frames:
+- Entering a `Block` (`If` then/else arms, `While` body) pushes an empty dict: `self.scopes.append({})`.
+- Exiting a `Block` pops the frame: `self.scopes.pop()`.
+- Declarations add variables to `self.scopes[-1]` (top frame), checking only the top frame for duplicate names. Outer variables can be shadowed in inner blocks.
+- Variable lookups search from the top frame downwards (`reversed(self.scopes)`).
 
-## Types and Coercion Rules
+## Types, Coercion, and Basic Blocks
 
-The compiler strictly checks types during the `SemanticChecker` pass:
-- **`i32`**: 32-bit integer.
-- **`i64`**: 64-bit integer.
-- **`bool`**: Boolean type (`true` or `false`). Evaluates to a 1-bit integer (`i1`) in LLVM IR.
-
-**Coercion Rules (from `SemanticChecker`):**
-- You cannot mix types unless explicitly allowed by widening.
-- `i32` automatically widens to `i64` in assignments, initializations, and when present on either side of arithmetic (`+`, `-`, `*`) or comparisons (`==`, `!=`).
-- Large constants that do not fit in `i32` will trigger an overflow error if assigned to an `i32` variable.
-- `bool` cannot be used in arithmetic operations (`+`, `-`, `*`) and cannot be compared to integers (`i32`, `i64`).
+- **Types**: `i32`, `i64`, `bool` (`i1` in LLVM IR).
+- **Coercion**: `i32` automatically widens to `i64` in initializers, assignments, arithmetic (`+`, `-`, `*`), and comparisons (`==`, `!=`).
+- **Basic Blocks**: `if` constructs generate `then`, `else` (optional), and `merge` basic blocks. `while` constructs generate `while_cond`, `while_body`, and `while_end` basic blocks with a back-edge `br` instruction.
+- **Entry Allocas**: All variable `alloca` instructions are placed at the beginning of the entry basic block (`alloca_in_entry`), allowing LLVM `mem2reg` to optimize memory slots into registers.
 
 ## Error Codes
 
-The following are the exact error messages generated by the `raise_err`, `raise_syntax_err`, and `_sem_err` functions in `compiler.py`.
-
-### Lexer Errors
+### Lexer & Parser Errors
 - **9**: `compilation error: line {line}:{col}: '{' is not closed before the end of the line`
 - **10**: `compilation error: line {line}:{col}: unexpected byte {byte}`
 - **13**: `compilation error: line {line}:{col}: expected '==' (a single '=' is not an operator)`
-- **14**: `compilation error: line {line}:{col}: expected '==' (a single '!' is not an operator)`
-
-### Parser Errors (`raise_syntax_err` & `raise_err`)
-- **5**: `compilation error: line {line}:1: missing exit statement`
-- **6**: `compilation error: line {line}:{col}: exit must be the last statement`
-- **7**: `compilation error: line {line}:{col}: unparsable exit statement`
-- `compilation error: line {line}:{col}: expected {what_expected}, found end of line`
-- `compilation error: line {line}:{col}: expected {what_expected}, got '{tok.text}'`
-- `compilation error: line {line}:{col}: unexpected '{leftover.text}' after statement`
-- `compilation error: line {line}:{col}: expected statement, found end of line`
-- `compilation error: line {line}:{col}: cannot start a statement with '{tok.text}'`
-- `compilation error: line {line}:{col}: multiple comparisons in one expression are not allowed`
-- `compilation error: line {line}:{col}: expected constant or variable, found end of line`
-- `compilation error: line {line}:{col}: expected constant or variable, got '{tok.text}'`
+- `compilation error: line {line}:{col}: expected '{'`
+- `compilation error: line {line}:{col}: block must not be empty`
 
 ### SemanticChecker Errors
 - **1**: `compilation error: line {line}:{col}: redeclared variable '{name}'`
 - **2**: `compilation error: line {line}:{col}: undeclared variable '{name}'`
 - **12**: `compilation error: line {line}:{col}: cannot assign to immutable variable '{name}'`
-- `compilation error: line {line}:{col}: cannot {what} of type {want_type} with a value of type {have}`
-- `compilation error: line {line}:{col}: constant {expr.val} does not fit in {want_type}`
-- `compilation error: line {line}:{col}: cannot apply '{node.op}' to bool`
-- `compilation error: line {line}:{col}: cannot compare {lt} with {rt}`
-
-### Dead Error Codes
-The following error codes exist in the `ERRORS` dictionary but are **never raised** by the actual code:
-- **3**: `invalid variable name`
-- **4**: `unparsable statement`
-- **8**: `unsupported operator`
-- **11**: `unknown type`
+- `compilation error: line {line}:{col}: if condition must be bool, got {cond_type}`
+- `compilation error: line {line}:{col}: while condition must be bool, got {cond_type}`
+- `compilation error: line {line}:{col}: '!' requires bool operand, got {t}`
 
 ## Autotests
 
-The `tests/run_tests.sh` script tests all four categories (`valid_*.txt`, `invalid_*.txt`, `ok/*.txt`, `err/*.txt`). It uses **exact string matching** without regex substring matching (with output normalization for `Program exit with result `).
-
-**For Valid/OK tests (`valid_*.txt`, `ok/*.txt`):**
-1. The compiler must exit with code `0`.
-2. The generated `.ll` file is executed (using `lli` or `run_ll.py`).
-3. The runtime output is captured, normalized (stripped of `Program exit with result ` prefix and trailing whitespace), and exactly compared to the normalized content of `.out` or `.expected`.
-4. If a `.tokens` or `.ast` file exists, the script runs `compiler.py` with `--tokens` or `--ast` respectively, and compares the exact output against the reference file.
-
-**For Invalid/Err tests (`invalid_*.txt`, `err/*.txt`):**
-1. The compiler must exit with a non-zero code.
-2. The `stderr` output is captured and exactly matched against the `.err` or `.expected` file (ignoring trailing whitespace).
-3. The script verifies that **no `.ll` file was produced**.
-4. If an `.ast` file exists (the program is syntactically correct but semantically invalid), the script explicitly runs `compiler.py --ast`, ensures it exits with `0`, and exactly matches the AST dump against the reference file.
+Run tests via `tests/run_tests.sh`:
+```bash
+./tests/run_tests.sh
+```
