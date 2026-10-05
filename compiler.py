@@ -129,9 +129,8 @@ def lex(data: bytes):
             elif b in (32, 9):
                 pass
             elif b == 10:
-                if tokens:
-                    lexer_lines.append(tokens)
-                    tokens = []
+                lexer_lines.append(tokens)
+                tokens = []
                 line += 1; col = 0
             elif is_alpha(b):
                 state, start, start_col = "IDENT", i, col
@@ -396,18 +395,21 @@ class Parser:
         self.line_pos = 0
 
     def peek_line(self):
+        while self.line_pos < len(self.lines) and not self.lines[self.line_pos]:
+            self.line_pos += 1
         return self.lines[self.line_pos] if self.line_pos < len(self.lines) else None
 
     def next_line(self):
-        toks = self.lines[self.line_pos]
-        self.line_pos += 1
-        if toks:
+        while self.line_pos < len(self.lines) and not self.lines[self.line_pos]:
+            self.line_pos += 1
+        if self.line_pos < len(self.lines):
+            toks = self.lines[self.line_pos]
+            self.line_pos += 1
             self.toks, self.pos = toks, 0
             return True
         self.toks, self.pos = [], 0
         return False
 
-    # ── token-level helpers ────────────────────────────────────────────
     def peek(self):
         return self.toks[self.pos] if self.pos < len(self.toks) else None
 
