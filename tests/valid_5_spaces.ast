@@ -1,5 +1,5 @@
 Program
-  Decl space_var const
+  Decl space_var i32 const
     Const 100
   Exit
     Var space_var
