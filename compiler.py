@@ -369,6 +369,25 @@ class ExitNode(Node):
         return visitor.visit_exit(self)
 
 
+def guarantees_exit(node):
+    if node is None:
+        return False
+    if isinstance(node, ExitNode):
+        return True
+    if isinstance(node, BlockNode):
+        if node.exit is not None:
+            return True
+        for s in node.stmts:
+            if guarantees_exit(s):
+                return True
+        return False
+    if isinstance(node, IfNode):
+        if node.else_block is None:
+            return False
+        return guarantees_exit(node.then_block) and guarantees_exit(node.else_block)
+    return False
+
+
 class Parser:
     def __init__(self, lines):
         self.lines = lines
@@ -446,6 +465,8 @@ class Parser:
                 # single-line statements: check nothing is left
                 if not isinstance(stmt_node, IfNode):
                     self.expect_eol()
+                if guarantees_exit(stmt_node):
+                    has_exit = True
 
         if not has_exit:
             err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
@@ -616,6 +637,8 @@ class Parser:
                 stmts.append(stmt)
                 if not isinstance(stmt, IfNode):
                     self.expect_eol()
+                if guarantees_exit(stmt):
+                    has_exit = True
 
         # consume the '}' line
         self.next_line()
@@ -706,7 +729,7 @@ class SemanticChecker:
     def visit_not(self, node):
         t = node.operand.accept(self)
         if t != "bool":
-            self._sem_err(node.line, node.col,
+            self._sem_err(node.line, node.col+1,
                           f"'!' requires bool operand, got {t}")
         node.type = "bool"
         return node.type
@@ -779,11 +802,22 @@ class CodeGenVisitor:
             return self.builder.sext(value, I64, name="wide")
         return value
 
+    def alloca_in_entry(self, typ, name):
+        entry_bb = self.builder.function.entry_basic_block
+        curr_bb = self.builder.block
+        if entry_bb.instructions:
+            self.builder.position_before(entry_bb.instructions[0])
+        else:
+            self.builder.position_at_end(entry_bb)
+        ptr = self.builder.alloca(typ, name=name)
+        self.builder.position_at_end(curr_bb)
+        return ptr
+
     def visit_decl(self, node):
         llvm_type = TYPES[node.type_name]
         init_val = node.init.accept(self)
         init_val = self.coerce(init_val, node.init.type, node.type_name)
-        ptr = self.builder.alloca(llvm_type, name=node.name)
+        ptr = self.alloca_in_entry(llvm_type, node.name)
         self.builder.store(init_val, ptr)
         self.symbols[node] = ptr
 
@@ -814,26 +848,26 @@ class CodeGenVisitor:
         return self.builder.xor(val, ir.Constant(I1, 1), name="not")
 
     def visit_if(self, node):
-        cond_val = node.condition.accept(self)
+        cond = node.condition.accept(self)
 
         then_bb  = self.builder.function.append_basic_block("then")
-        else_bb  = self.builder.function.append_basic_block("else")
+        else_bb  = self.builder.function.append_basic_block("else") if node.else_block else None
         merge_bb = self.builder.function.append_basic_block("merge")
 
-        self.builder.cbranch(cond_val, then_bb, else_bb)
+        self.builder.cbranch(cond, then_bb, else_bb or merge_bb)
 
-        # then branch
+        # then arm
         self.builder.position_at_end(then_bb)
         node.then_block.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.branch(merge_bb)
 
-        # else branch
-        self.builder.position_at_end(else_bb)
+        # else arm
         if node.else_block:
+            self.builder.position_at_end(else_bb)
             node.else_block.accept(self)
-        if not self.builder.block.is_terminated:
-            self.builder.branch(merge_bb)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(merge_bb)
 
         self.builder.position_at_end(merge_bb)
 
