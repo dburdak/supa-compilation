@@ -796,6 +796,8 @@ class CodeGenVisitor:
             stmt.accept(self)
         if node.exit:
             node.exit.accept(self)
+        if not self.builder.block.is_terminated:
+            self.builder.unreachable()
 
     def coerce(self, value, have, want):
         if have == "i32" and want == "i64":
