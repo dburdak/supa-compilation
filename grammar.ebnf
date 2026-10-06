@@ -8,7 +8,11 @@ assignment ::= ident ":=" expr
 
 finish ::= "exit" operand
 
-statement ::= declaration | assignment
+statement ::= declaration | assignment | if
+
+if ::= "if" expr NL block [ "else" NL block ]
+
+block ::= "{" NL { statement } [ exit NL ] "}" NL
 
 operand ::= ident | number | "true" | "false"
 

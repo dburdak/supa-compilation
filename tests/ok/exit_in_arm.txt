@@ -1,0 +1,9 @@
+bool go{true}
+if go
+{
+exit 42
+}
+else
+{
+exit 0
+}
