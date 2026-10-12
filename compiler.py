@@ -436,6 +436,94 @@ class ExitNode(Node):
         return visitor.visit_exit(self)
 
 
+class Param:
+    def __init__(self, line, col, type_name, name):
+        self.line, self.col, self.type_name, self.name = line, col, type_name, name
+
+
+class FnDeclNode(StmtNode):
+    def __init__(self, line, col, name, params, ret_type, body):
+        self.line, self.col = line, col
+        self.name = name          # str
+        self.params = params      # list[Param]
+        self.ret_type = ret_type  # str
+        self.body = body          # BlockNode
+
+    def dump(self, indent=0):
+        params_str = ", ".join(f"{p.type_name} {p.name}" for p in self.params)
+        print(" " * indent + f"FnDecl {self.name}({params_str}) -> {self.ret_type}")
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_decl(self)
+
+
+class FnCallNode(ExprNode):
+    def __init__(self, line, col, name, args):
+        self.line, self.col = line, col
+        self.name = name   # str
+        self.args = args   # list[ExprNode]
+
+    def dump(self, indent=0):
+        print(" " * indent + f"FnCall {self.name}")
+        for a in self.args:
+            a.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_call(self)
+
+
+class BlockNode(Node):
+    """A block: { NL stmts exit NL } — used inside functions and if/while."""
+    def __init__(self, line, col, stmts, exit_node):
+        self.line, self.col = line, col
+        self.stmts = stmts          # list of statement nodes
+        self.exit_node = exit_node  # ExitNode or None
+
+    def dump(self, indent=0):
+        print(" " * indent + "Block")
+        for s in self.stmts:
+            s.dump(indent + 2)
+        if self.exit_node:
+            self.exit_node.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_block(self)
+
+
+class IfNode(StmtNode):
+    def __init__(self, line, col, cond, then_block, else_block):
+        self.line, self.col = line, col
+        self.cond = cond               # ExprNode
+        self.then_block = then_block   # BlockNode
+        self.else_block = else_block   # BlockNode or None
+
+    def dump(self, indent=0):
+        print(" " * indent + "If")
+        self.cond.dump(indent + 2)
+        self.then_block.dump(indent + 2)
+        if self.else_block:
+            print(" " * (indent + 2) + "Else")
+            self.else_block.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_if(self)
+
+
+class WhileNode(StmtNode):
+    def __init__(self, line, col, cond, body):
+        self.line, self.col = line, col
+        self.cond = cond   # ExprNode
+        self.body = body   # BlockNode
+
+    def dump(self, indent=0):
+        print(" " * indent + "While")
+        self.cond.dump(indent + 2)
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_while(self)
+
 
 
 class Parser:
@@ -524,14 +612,24 @@ class Parser:
         first_col  = stmts[0].col  if stmts else (exit_node.col  if exit_node else 1)
         return ProgramNode(first_line, first_col, stmts, exit_node)
 
-    def parse_statement(self):
+    def parse_statement(self, is_top_level=True, inside_fn=False):
         tok = self.peek()
         if tok is None:
             line, col = self.get_pos_info()
             raise_syntax_err(line, col, "expected statement, found end of line")
 
         if tok.kind == "keyword" and tok.text == "struct":
+            if not is_top_level:
+                raise_syntax_err(tok.line, tok.col, "struct declaration not allowed inside a function body")
             return self.parse_struct_def()
+        elif tok.kind == "keyword" and tok.text == "fn":
+            if not is_top_level:
+                raise_syntax_err(tok.line, tok.col, "function declaration not allowed inside a function body")
+            return self.parse_fn_decl()
+        elif tok.kind == "keyword" and tok.text == "if":
+            return self.parse_if(inside_fn=inside_fn)
+        elif tok.kind == "keyword" and tok.text == "while":
+            return self.parse_while(inside_fn=inside_fn)
         elif tok.kind == "typename":
             return self.parse_decl()
         elif tok.kind == "ident":
@@ -637,13 +735,151 @@ class Parser:
 
     def parse_exit(self):
         exit_tok = self.eat()  # "exit"
-        val = self.parse_operand(is_exit=True)
+        val = self.parse_expr(is_exit=True)
         return ExitNode(exit_tok.line, exit_tok.col, val)
+
+    def parse_fn_decl(self):
+        fn_tok = self.eat()  # "fn"
+        name_tok = self.expect("ident", "function name")
+        self.expect("assignment", "':='")
+        self.expect("lparen", "'('")
+
+        params = []
+        param_names = set()
+        if self.peek() is not None and self.peek().kind != "rparen":
+            params = self.parse_param_list(param_names)
+
+        self.expect("rparen", "')'")
+        self.expect("arrow", "'->'")
+
+        ret_tok = self.peek()
+        if ret_tok is None or ret_tok.kind not in ("typename", "ident"):
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, "expected return type")
+        self.eat()
+
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after function signature")
+
+        body = self.parse_block(inside_fn=True)
+        return FnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
+
+    def parse_param_list(self, param_names):
+        params = []
+        while True:
+            type_tok = self.peek()
+            if type_tok is None or type_tok.kind not in ("typename", "ident"):
+                line, col = self.get_pos_info()
+                raise_syntax_err(line, col, "expected parameter type")
+            self.eat()
+            name_tok = self.expect("ident", "parameter name")
+            if name_tok.text in param_names:
+                raise_err(1, name_tok.line, name_tok.col, ue_part=f"'{name_tok.text}'")
+            param_names.add(name_tok.text)
+            params.append(Param(type_tok.line, type_tok.col, type_tok.text, name_tok.text))
+            if self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+            else:
+                break
+        return params
+
+    def parse_block(self, inside_fn=False):
+        """Parse: '{' NL { statement } [ exit NL ] '}' NL"""
+        nxt = self.peek_line()
+        if nxt is None:
+            raise_syntax_err(0, 0, "expected '{', found end of file")
+        if len(nxt) != 1 or nxt[0].kind != "lbrace":
+            raise_syntax_err(nxt[0].line, nxt[0].col, f"expected '{{', got '{nxt[0].text}'")
+        self.next_line()
+        lbrace_tok = self.eat()
+
+        stmts = []
+        exit_node = None
+        has_exit = False
+
+        while True:
+            nxt = self.peek_line()
+            if nxt is None:
+                raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block opened here is never closed")
+            if len(nxt) == 1 and nxt[0].kind == "rbrace":
+                self.next_line()
+                self.eat()  # '}'
+                break
+
+            self.next_line()
+            tok = self.peek()
+
+            if tok is None:
+                continue
+
+            if tok.kind == "statement" and tok.text == "exit":
+                if has_exit:
+                    raise_err(6, tok.line, tok.col)
+                exit_node = self.parse_exit()
+                has_exit = True
+                # check nothing follows exit on the same line
+                if self.peek() is not None:
+                    leftover = self.peek()
+                    raise_err(7, leftover.line, leftover.col)
+                # next must be '}'
+                nxt2 = self.peek_line()
+                if nxt2 is None or not (len(nxt2) == 1 and nxt2[0].kind == "rbrace"):
+                    if nxt2 is not None:
+                        raise_err(6, nxt2[0].line, nxt2[0].col)
+                    else:
+                        raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block opened here is never closed")
+                self.next_line()
+                self.eat()  # '}'
+                break
+            else:
+                if has_exit:
+                    raise_err(6, tok.line, tok.col)
+                stmt = self.parse_statement(is_top_level=False, inside_fn=inside_fn)
+                stmts.append(stmt)
+                if self.peek() is not None:
+                    leftover = self.peek()
+                    raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
+
+        if inside_fn and not has_exit:
+            raise_err(5, lbrace_tok.line, lbrace_tok.col)
+
+        return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node)
+
+    def parse_if(self, inside_fn=False):
+        if_tok = self.eat()  # "if"
+        cond = self.parse_expr()
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after if condition")
+        then_block = self.parse_block(inside_fn=inside_fn)
+
+        # check for else
+        nxt = self.peek_line()
+        else_block = None
+        if nxt is not None and len(nxt) == 1 and nxt[0].kind == "keyword" and nxt[0].text == "else":
+            self.next_line()
+            self.eat()  # "else"
+            if self.peek() is not None:
+                leftover = self.peek()
+                raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after else")
+            else_block = self.parse_block(inside_fn=inside_fn)
+
+        return IfNode(if_tok.line, if_tok.col, cond, then_block, else_block)
+
+    def parse_while(self, inside_fn=False):
+        while_tok = self.eat()  # "while"
+        cond = self.parse_expr()
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after while condition")
+        body = self.parse_block(inside_fn=inside_fn)
+        return WhileNode(while_tok.line, while_tok.col, cond, body)
 
     def parse_arith(self):
         # arith ::= term { ("+" | "-") term }
         node = self.parse_term()
-        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-":
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in ("+", "-"):
             op_tok = self.eat()
             node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term())
         return node
@@ -656,7 +892,7 @@ class Parser:
             node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
         return node
 
-    def parse_expr(self):
+    def parse_expr(self, is_exit=False):
         # expr ::= arith [ ("==" | "!=") arith ]
         node = self.parse_arith()
         if (tok := self.peek()) is not None and tok.kind == "comparison":
@@ -668,7 +904,7 @@ class Parser:
         return node
 
     def parse_operand(self, is_exit=False):
-        # operand ::= ident | constant | "true" | "false"
+        # operand ::= fn_call | ident | constant | "true" | "false"
         tok = self.peek()
 
         if tok is None:
@@ -683,6 +919,9 @@ class Parser:
             operand = self.parse_operand(is_exit=is_exit)
             return NotNode(bang.line, bang.col, operand)
         elif tok.kind == "ident":
+            # peek ahead: if next token is '(', it's a function call
+            if self.pos + 1 < len(self.toks) and self.toks[self.pos + 1].kind == "lparen":
+                return self.parse_fn_call()
             self.eat()
             return VarNode(tok.line, tok.col, tok.text)
         elif tok.kind == "constant":
@@ -774,6 +1013,30 @@ class Parser:
             raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block must not be empty")
 
         return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node)
+
+    def parse_fn_call(self):
+        name_tok = self.eat()  # ident
+        self.eat()             # '('
+        args = []
+        if self.peek() is not None and self.peek().kind != "rparen":
+            args.append(self.parse_expr())
+            while self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+                args.append(self.parse_expr())
+        self.expect("rparen", "')'")
+        return FnCallNode(name_tok.line, name_tok.col, name_tok.text, args)
+
+    def parse_fn_call(self):
+        name_tok = self.eat()  # ident
+        self.eat()             # '('
+        args = []
+        if self.peek() is not None and self.peek().kind != "rparen":
+            args.append(self.parse_expr())
+            while self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+                args.append(self.parse_expr())
+        self.expect("rparen", "')'")
+        return FnCallNode(name_tok.line, name_tok.col, name_tok.text, args)
 
 
 class SemanticChecker:
