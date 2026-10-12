@@ -10,6 +10,16 @@ struct_def ::= "struct" ident NL "{" NL { field_decl } "}" NL
 
 field_decl ::= type [ "mut" ] ident NL
 
+fn_decl ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block
+
+param_list  ::= param { "," param }
+
+param ::= type ident
+
+fn_call     ::= ident "(" [ arg_list ] ")"
+
+arg_list    ::= expr { "," expr }
+
 declaration ::= type [ "mut" ] ident "{" expr { "," expr } "}"
 
 assignment ::= ident ":=" expr
