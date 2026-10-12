@@ -1,0 +1,11 @@
+bool outer{true}
+bool inner{true}
+i32 mut x{0}
+if outer
+{
+if inner
+{
+x := 7
+}
+}
+exit x

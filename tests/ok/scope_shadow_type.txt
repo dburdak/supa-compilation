@@ -1,0 +1,7 @@
+i32 x{10}
+bool cond{true}
+if cond
+{
+bool x{false}
+}
+exit x

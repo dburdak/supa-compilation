@@ -1,0 +1,11 @@
+bool flag{false}
+i32 mut result{0}
+if flag
+{
+result := 1
+}
+else
+{
+result := 2
+}
+exit result

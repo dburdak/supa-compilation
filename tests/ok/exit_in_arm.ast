@@ -1,0 +1,13 @@
+Program
+  Decl go bool const
+    Bool true
+  If
+    Var go
+    Block
+      Exit
+        Const 42
+    Block
+      Exit
+        Const 0
+  Exit
+    Const 0

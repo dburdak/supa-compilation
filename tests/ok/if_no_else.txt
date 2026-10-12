@@ -1,0 +1,7 @@
+bool a{true}
+i32 mut x{0}
+if a
+{
+x := 5
+}
+exit x

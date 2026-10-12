@@ -1,0 +1,7 @@
+bool a{false}
+bool mut result{false}
+if !a
+{
+result := true
+}
+exit result

@@ -1,0 +1,6 @@
+bool cond{true}
+if cond
+{
+i32 y{10}
+}
+exit y
