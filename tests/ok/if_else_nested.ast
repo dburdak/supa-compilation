@@ -1,0 +1,17 @@
+Program
+  Decl outer bool const
+    Bool true
+  Decl inner bool const
+    Bool true
+  Decl x i32 mut
+    Const 0
+  If
+    Var outer
+    Block
+      If
+        Var inner
+        Block
+          Assign x
+            Const 7
+  Exit
+    Var x

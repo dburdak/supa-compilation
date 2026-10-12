@@ -1,0 +1,15 @@
+Program
+  Decl cond bool const
+    Bool true
+  Decl x i32 mut
+    Const 0
+  If
+    Var cond
+    Block
+      Assign x
+        Const 10
+    Block
+      Assign x
+        Const 20
+  Exit
+    Var x

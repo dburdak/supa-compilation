@@ -350,7 +350,6 @@ class IfNode(StmtNode):
         self.condition.dump(indent + 2)
         self.then_block.dump(indent + 2)
         if self.else_block:
-            print(" " * indent + "Else")
             self.else_block.dump(indent + 2)
 
     def accept(self, visitor):
@@ -384,23 +383,6 @@ class ExitNode(Node):
         return visitor.visit_exit(self)
 
 
-def guarantees_exit(node):
-    if node is None:
-        return False
-    if isinstance(node, ExitNode):
-        return True
-    if isinstance(node, BlockNode):
-        if node.exit is not None:
-            return True
-        for s in node.stmts:
-            if guarantees_exit(s):
-                return True
-        return False
-    if isinstance(node, IfNode):
-        if node.else_block is None:
-            return False
-        return guarantees_exit(node.then_block) and guarantees_exit(node.else_block)
-    return False
 
 
 class Parser:
@@ -461,34 +443,29 @@ class Parser:
     # ── top-level ──────────────────────────────────────────────────────
     def parse_program(self):
         stmts = []
-        exit_node = None
-        has_exit = False
-
-        while self.peek_line() is not None:
-            if has_exit:
-                nxt = self.peek_line()
-                raise_err(6, nxt[0].line, nxt[0].col)
-
+        while self.peek_line() is not None and not (
+            self.peek_line()[0].kind == "statement" and self.peek_line()[0].text == "exit"
+        ):
             self.next_line()
-            tok = self.peek()
-
-            if tok is not None and tok.kind == "statement" and tok.text == "exit":
-                exit_node = self.parse_exit()
+            stmt_node = self.parse_statement()
+            stmts.append(stmt_node)
+            # if/block statements already consumed all their lines;
+            # single-line statements: check nothing is left
+            if not isinstance(stmt_node, (IfNode, WhileNode)):
                 self.expect_eol()
-                has_exit = True
-            else:
-                stmt_node = self.parse_statement()
-                stmts.append(stmt_node)
-                # if/block statements already consumed all their lines;
-                # single-line statements: check nothing is left
-                if not isinstance(stmt_node, (IfNode, WhileNode)):
-                    self.expect_eol()
-                if guarantees_exit(stmt_node):
-                    has_exit = True
 
-        if not has_exit:
+        nxt = self.peek_line()
+        if nxt is None:
             err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1
             raise_err(5, err_line, 1)
+
+        self.next_line()
+        exit_node = self.parse_exit()
+        self.expect_eol()
+
+        if self.peek_line() is not None:
+            trailing = self.peek_line()
+            raise_err(6, trailing[0].line, trailing[0].col)
 
         first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1)
         first_col  = stmts[0].col  if stmts else (exit_node.col  if exit_node else 1)
@@ -665,8 +642,6 @@ class Parser:
                 stmts.append(stmt)
                 if not isinstance(stmt, (IfNode, WhileNode)):
                     self.expect_eol()
-                if guarantees_exit(stmt):
-                    has_exit = True
 
         # consume the '}' line
         self.next_line()
@@ -740,7 +715,7 @@ class SemanticChecker:
     def visit_if(self, node):
         cond_type = node.condition.accept(self)
         if cond_type != "bool":
-            self._sem_err(node.condition.line, node.condition.col,
+            self._sem_err(node.line, node.col,
                           f"if condition must be bool, got {cond_type}")
         node.then_block.accept(self)
         if node.else_block:
@@ -764,7 +739,7 @@ class SemanticChecker:
     def visit_not(self, node):
         t = node.operand.accept(self)
         if t != "bool":
-            self._sem_err(node.line, node.col+1,
+            self._sem_err(node.line, node.col,
                           f"'!' requires bool operand, got {t}")
         node.type = "bool"
         return node.type
