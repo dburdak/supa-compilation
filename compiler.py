@@ -517,8 +517,6 @@ class Parser:
         elif tok.kind == "typename":
             return self.parse_decl()
         elif tok.kind == "ident":
-            # Disambiguate between struct object declaration and assignment:
-            # Declaration: StructName [mut] var{...}
             if self.pos + 1 < len(self.toks):
                 next_tok = self.toks[self.pos + 1]
                 if next_tok.kind == "specifier" and next_tok.text == "mut":
