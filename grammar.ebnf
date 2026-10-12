@@ -24,16 +24,23 @@ declaration ::= type [ "mut" ] ident "{" expr { "," expr } "}"
 
 assignment ::= ident ":=" expr
 
+if ::= "if" expr NL block [ "else" NL block ]
+
+while ::= "while" expr NL block
+
+block ::= "{" NL { statement } [ finish NL ] "}" NL
+
 finish ::= "exit" operand
 
-statement ::= struct_def | declaration | assignment
+statement ::= struct_def | fn_decl | declaration | assignment | if | while
 
-operand ::= ident | number | "true" | "false"
+operand ::= fn_call | ident | number | "true" | "false"
 
 expr ::= arith [ ("==" | "!=") arith ]
 
 arith ::= term { ("+" | "-") term }
 
 term ::= operand { "*" operand }
+
 
 
