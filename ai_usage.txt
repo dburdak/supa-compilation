@@ -1,294 +1,370 @@
-Зберігання булевого типу в 8 бітах
-https://gemini.google.com/app/f3b31f5e8f01eda1
-
-User prompt: як в компілятори записують булевий тип у 8 бітів? ir.IntType(8) це типу 1 якщо true і 0 якщо false?
-Response: Так, саме так! У багатьох компіляторах та генераторах коду (зокрема в LLVM IR, де такий синтаксис як ir.IntType(8) або i8 є стандартом) булевий тип представляють як 8-бітне ціле число, де:
-1 (або 0x01 у 16-рiчнiй системі) означає true
-0 (або 0x00) означає false
-Чому використовують 8 бітів (i8), якщо для булевого значення потрібен лише 1 біт?
-Адресація пам'яті: Сучасні процесори не можуть адресувати окремі біти в оперативній пам'яті. Мінімальна адресовна одиниця пам'яті — це 1 байт (8 бітів). Щоб виділити змінну в пам'яті, зберегти її або зчитати за адресою, компілятору найпростіше виділити повноцінний байт.
-Вирівнювання (Alignment): Робота з даними, розмір яких кратний байту, значно прискорює виконання програм на рівні заліза та процесорних регістрів.
-Як це працює на вищих і нижчих рівнях abstraction:
-В LLVM / IR: Ви можете побачити ir.IntType(1) (1 біт, i1) для суто логічних операцій (наприклад, у переходах br i1 %cond, label %true_block, label %false_block), але при виділенні пам'яті в стеку або купі (alloca, store, load) компілятори майже завжди приводять i1 до i8 (або IntType(8)), розширюючи значущий біт.
-Перевірка значень у C/C++ та ABI: У мові C/C++ тип bool зазвичай має розмір sizeof(bool) == 1 (тобто 1 байт = 8 бітів). При цьому значення 0 вважається false, а будь-яке ненульове значення (не лише 1, а й 2, 255 тощо) під час логічного розгалуження сприймається як true. Проте під час присвоєння true компілятор гарантовано записує в ці 8 бітів саме 1.
-
-User prompt: не пиши за мене код, але підкажи що мені ще потрібно додати, бо у мене точно не працуюватиме == != та ось ця тісність , що множення та інші арифметичні більш пріорітетні та по ним мають бути групування рекурсії. Ось код: from llvmlite import ir import llvmlite.binding as llvm import argparse import sys parser = argparse.ArgumentParser() parser.add_argument("source_path", help="path to the .txt file with your code") parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file") parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout") parser.add_argument("--ast", action="store_true", help="print the AST tree and exit") args = parser.parse_args() I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64) module = ir.Module(name="practice1") module.triple = llvm.get_default_triple() main = ir.Function(module, ir.FunctionType(I32, []), name="main") entry_block = main.append_basic_block("entry") builder = ir.IRBuilder(entry_block) printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf") # declaration only text = b"Program exit with result %d\n\0" fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt") fmt.linkage, fmt.global_constant = "private", True fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text)) TYPES = { "i32": I32, "i64": I64, "bool": I8 } KEYWORDS = { "i32": "typename", "i64": "typename", "bool": "typename", "true": "bool_literal", "false": "bool_literal", "mut": "specifier", "exit": "statement", } OPERATORS = { "+": builder.add, "-": builder.sub, "*": builder.mul, } def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable" } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (1, 2, 10, 11, 12) and ue_part: msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13) class Token: def __init__(self, kind, text, line, col): self.kind = kind self.text = text self.line = line self.col = col def to_str(self): return f"({self.kind}, {self.text}, {self.line}, {self.col})" def is_alpha(b): if (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_"): return True return False def is_digit(b): if ord("0") <= b <= ord("9"): return True return False def is_operator(b): if ord("*") == b or ord("+") == b or ord("-") == b: return True return False def lex(data: bytes): lexer_lines, tokens = [], [] state, start, line, col = "START", 0, 1, 1 open_brace_col = None start_col = 1 i = 0 while i <= len(data): # one extra step: the end of input b = data[i] if i < len(data) else None if state == "START": if b is None: break elif b in (32, 9): pass # space, tab elif b == 10: # new line if open_brace_col is not None: raise_err(9, line, open_brace_col) lexer_lines.append(tokens) tokens = [] line += 1; col = 0 elif is_alpha(b): state, start, start_col = "IDENT", i, col elif is_digit(b): state, start, start_col = "NUMBER", i, col elif b == ord("{"): tokens.append(Token("lbrace","{", line, col)) open_brace_col = col elif b == ord("}"): tokens.append(Token("rbrace", "}", line, col)) open_brace_col = None elif b == ord(":"): state = "ASSIGN" start_col = col elif b == ord("!"): state = "NOTEQUAL" start_col = col elif b == ord("="): state = "EQUAL" start_col = col elif is_operator(b): tokens.append(Token("operator", chr(b), line, col)) else: raise_err(10, line, col, ue_part = chr(b)) elif state == "IDENT": if b is not None and (is_alpha(b) or is_digit(b)): pass else: word = data[start:i] tokens.append(Token(KEYWORDS.get(word.decode(), "ident"), word.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "NUMBER": if b is not None and is_digit(b): pass#braces elif b is not None and is_alpha(b): raise_err(10, line, col, ue_part = chr(b)) else: num = data[start:i] tokens.append(Token(KEYWORDS.get(num.decode(), "constant"), num.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "ASSIGN": if b == ord("="): tokens.append(Token("assignment", ":=", line, start_col)) state = "START" elif b is None: raise_err(10, line, col, ue_part="'end of file'") else: raise_err(10, line, col, ue_part = chr(b)) elif state == "EQUALS": if b == ord("="): tokens.append(Token("comparison","==", line, start_col)) state = "START" elif b is None: raise_err(10, line, col, ue_part="'end of file'") else: raise_err(10, line, col, ue_part = chr(b)) elif state == "NOTEQUAL": if b == ord("="): tokens.append(Token("comparison","!=", line, start_col)) state = "START" elif b is None: raise_err(10, line, col, ue_part="'end of file'") else: raise_err(10, line, col, ue_part = chr(b)) if tokens: lexer_lines.append(tokens) return lexer_lines class Node: def __init__(self, line, col): self.line, self.col = line, col class ProgramNode(Node): def __init__(self, line, col, stmts, exit_node): self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node def dump(self, indent=0): print(" " * indent + "Program") for stmt in self.stmts: stmt.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_program(self) class StmtNode(Node): pass class ExprNode(Node): pass class DeclNode(StmtNode): def __init__(self, line, col, name: str, mutable: bool, init): self.line, self.col, self.name, self.mutable, self.init = line, col, name, mutable, init def dump(self, indent=0): kind = "mut" if self.mutable else "const" print(" " * indent + f"Decl {self.name} {kind}") self.init.dump(indent + 2) def accept(self, visitor): return visitor.visit_decl(self) class AssignNode(StmtNode): def __init__(self, line, col, name, value): self.line, self.col, self.name, self.value = line, col, name, value def dump(self, indent=0): print(" " * indent + f"Assign {self.name}") self.value.dump(indent + 2) def accept(self, visitor): return visitor.visit_assign(self) class BinOpNode(ExprNode): def __init__(self, line, col, op, left, right): self.line, self.col, self.op, self.left, self.right = line, col, op, left, right def dump(self, indent=0): print(" " * indent + f"BinOp {self.op}") self.left.dump(indent + 2) self.right.dump(indent + 2) def accept(self, visitor): return visitor.visit_binop(self) class VarNode(ExprNode): def __init__(self, line, col, name): self.line, self.col, self.name = line, col, name def dump(self, indent=0): print(" " * indent + f"Var {self.name}") def accept(self, visitor): return visitor.visit_var(self) class ConstNode(ExprNode): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Const {self.val}") def accept(self, visitor): return visitor.visit_const(self) class ExitNode(Node): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + "Exit") self.val.dump(indent + 2) def accept(self, visitor): return visitor.visit_exit(self) class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) # Exit must be the last statement tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() if has_exit: raise_err(7, line, col) # Unparsable exit statement else: leftover = self.peek() raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement") if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, "expected statement, found end of line") if tok.kind == "typename" and (tok.text == "i32" or tok.text == "bool" or tok.text == "i64"): return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'") def parse_decl(self): i32_tok = self.eat() # "i32" mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.expect("ident", "variable name") self.expect("lbrace", "'{'") init = self.parse_arith() self.expect("rbrace", "'}'") return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident self.expect("assignment", "':='") value = self.parse_arith() return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_arith(self): # expr ::= term { ("+" | "-") term } node = self.parse_term() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-": op_tok = self.eat() # Будуємо лівоасоціативне дерево BinOpNode node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term()) return node def parse_term(self): # term ::= operand { "*" operand } node = self.parse_operand() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*": op_tok = self.eat() node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand()) return node def parse_expr(self): node = self.parse_arith() if (tok := self.peek()) is not None and tok.kind == "comparison" and tok.text in "==!=": op_tok = self.eat() return BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_arith()) return node def parse_operand(self, is_exit=False): # operand ::= ident | constant tok = self.peek() if tok is None: line, col = self.get_pos_info() if is_exit: raise_err(7, line, col) else: raise_syntax_err(line, col, "expected constant or variable, found end of line") if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) else: if is_exit: raise_err(7, tok.line, tok.col) else: raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'") class CodeGenVisitor: def __init__(self, builder, printf_func, fmt_global): self.builder = builder self.printf = printf_func self.fmt_global = fmt_global # Symbol table: name -> (alloca_ptr, is_mutable) self.symbols = {} def visit_program(self, node): for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) else: err_line = node.stmts[-1].line if node.stmts else node.line raise_err(5, err_line, 1) def visit_decl(self, node): if node.name in self.symbols: raise_err(1, node.line, node.col, ue_part=f"'{node.name}'") # redeclared variable init_val = node.init.accept(self) ptr = self.builder.alloca(I32, name=node.name) self.builder.store(init_val, ptr) self.symbols[node.name] = (ptr, node.mutable) def visit_assign(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, is_mutable = self.symbols[node.name] if not is_mutable: raise_err(12, node.line, node.col, ue_part=f"'{node.name}'") # cannot assign to const val = node.value.accept(self) self.builder.store(val, ptr) def visit_exit(self, node): val = node.val.accept(self) # GEP to get pointer to format string fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, val]) self.builder.ret(ir.Constant(I32, 0)) def visit_binop(self, node): left_val = node.left.accept(self) right_val = node.right.accept(self) if node.op == "+": return self.builder.add(left_val, right_val) elif node.op == "-": return self.builder.sub(left_val, right_val) elif node.op == "*": return self.builder.mul(left_val, right_val) else: raise_err(8, node.line, node.col) # unsupported operator def visit_var(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, _ = self.symbols[node.name] return self.builder.load(ptr, name=node.name) def visit_const(self, node): return ir.Constant(I32, int(node.val)) with open(args.source_path, "rb") as f: file_bytes = f.read() lines = lex(file_bytes) if args.tokens: for line in lines: for token in line: print(token.to_str() + " ") print() parser_obj = Parser(lines) ast = parser_obj.parse_program() if args.ast: ast.dump() sys.exit(0) codegen = CodeGenVisitor(builder, printf, fmt) ast.accept(codegen) if args.output_path: with open(args.output_path, "w") as out_f: out_f.write(str(module)) я робила task 1 відповідно до практичного завдання: Practice 4: types, comparisons and a semantic pass Languages and Compilers Design · Week 4 Practice 3 left you with a tree and a code generator that walks it, and with three checks (declared before use, declared once, mut before :=) living inside that walk, next to the builder calls. This practice grows the language to three types and gives the checks a home of their own: a semantic pass that walks the same tree before any IR exists, decides the type of every expression, and either rejects the program with a line:column or hands code generation a tree it can trust. Grading (3 points total) Task 1 — the front end knows i64, bool, true / false, == and !=; --ast prints the type of every declaration 0.5 pt Task 2 — a separate semantic pass: a symbol table that stores types, the three old checks moved out of code generation, the type rules below, constants checked against the type they land in; every error with line:column 1.5 pt Task 3 — code generation from the checked tree: sext where the checker widened, icmp for comparisons, exit of an integer or a bool; tests/ok and tests/err with at least 6 programs each 1 pt Show the result to the teacher during the practice or within the next 3 days. ai_usage.txt in your repository is updated for this practice: tools, prompts, what you took as-is, what you changed — or “not used”, if that is true. A missing or stub file is 0 for the practice. Code generation stays in llvmlite.ir (or llvm::IRBuilder): the only IR text is str(module); a compiler that assembles IR from strings gets 0 for Task 3. A check that still runs inside the code generator does not count for Task 2. THE LANGUAGE One statement per line; blank lines are allowed. • Three types: i32 and i64 are integers, bool is a boolean with the literals true and false. i64 a{10}, bool b{true}, i32 x{15}. • A variable is const unless marked mut: i64 mut y{x}. The initialiser in {} is mandatory. y := y * z + a assigns; only a mut variable may be assigned. • Arithmetic is a chain of constants and variables joined by +, -, *; * binds tighter, equal precedence groups from left to right. It works on integers only; the result has the wider of the two types. • == and != compare two integers or two bools and give a bool. One comparison per expression, and it binds weaker than arithmetic: x * 2 != y + 5 compares the two results. • An i32 value may go into an i64 variable. Nothing else converts: an i64 never goes into an i32, a bool never meets an integer. • exit y · exit 42 · exit true prints Program exit with result and ends the program. It takes a constant or a variable, never an operation; it is the last statement and there is exactly one. • A variable is declared once, before its first use. Names are letters, digits and _, not starting with a digit; i32, i64, bool, mut, exit, true, false are reserved. Constants are decimal numbers without a sign. Not in the language, and therefore a compilation error: parentheses; /, <, > or any operator other than + - * == !=; a single = or !; a sign in front of a constant or a name; two comparisons in one expression; two statements on one line; a declaration without {}; anything after exit. THE COMPILER INTERFACE Same layout, same two calls, same --ast: python3 compiler.py input.txt output.ll # compile python3 compiler.py --ast input.txt # print the tree, write nothing lli output.ll # run the IR while debugging On any error the compiler prints one line to stderr, exits non-zero and writes nothing: compilation error: line 2:5: cannot initialise 'c' of type i32 with a value of type i64. WARM-UP — TYPES ON PAPER (10 MINUTES, IN PAIRS) Before writing code, be the semantic pass. For each line write the type of the right-hand side, then the first line that must be rejected and the one-sentence reason: 1 i32 a{10} i64 b{a} bool c{a == b} i32 d{a + b} bool e{c == 1} exit d Show: the line number and the reason. Then compare with the rules in Task 2 — if you disagree with them, say so before you implement them. TASK 1 — THREE TYPES IN THE FRONT END (0.5 POINTS) A compiler that knows one type cannot say what a == b is, and every later feature — a condition in if, a function that returns a flag — needs that answer. The cheapest place to add a type is the front end: a keyword, a literal, two operators. Get it wrong here and the tree lies to everything that reads it. The language • i64 a{10} declares a 64-bit integer; i32 stays. bool b{true} declares a boolean; true and false are its only literals. • a == 10, a != b compare and produce a bool. One comparison per expression, and it binds weaker than arithmetic: x * 2 != y + 5 compares the two products. • Everything else is unchanged: mut, mandatory {}, :=, chains of + - *, one statement per line, exit last with a constant or a variable. Valid: i64 a{10} bool b{true} bool c{false} bool d{a == 10} bool mut e{a != 10} e := b == d i32 x{15} i64 mut y{x} i64 z{x + 10} y := y * z + a exit y Expected: Program exit with result 385. Lexer i64, bool, true, false are keywords — the same dictionary lookup after the word ends. == and != are two-byte operators: a new state after = and a new state after !, each accepting exactly one more byte. = alone and ! alone are lexical errors: line 2:10: expected '==' (a single '=' is not an operator). Grammar and tree decl ::= type [ "mut" ] ident "{" expr "}" type ::= "i32" | "i64" | "bool" expr ::= arith [ ("==" | "!=") arith ] arith ::= term { ("+" | "-") term } (the old expr) term ::= factor { "*" factor } factor ::= number | "true" | "false" | ident exit ::= "exit" factor The declaration node carries the type name; a boolean literal is a node of its own; the binary node’s operator may now be == or !=. The dump shows the type: Decl y i64 mut Decl d bool const Bool true Var x BinOp == Var a Const 10 Your Practice 3 .ast snapshots change in exactly one place — the declaration line. Update them by reading them, not by regenerating them blindly. 2 Show: --ast for the program above; the two lexical errors, a = 1 and !b, with their line:column. TASK 2 — THE SEMANTIC PASS (1.5 POINTS) A check that lives inside the code generator runs only when code is generated, and it fails halfway through building the IR. The classic ticket is “the compiler crashed” where the honest answer was “line 3: an i64 does not fit into an i32”. A pass of its own rejects the program before a single instruction exists, and can be tested without LLVM at all. A walk of its own A class of its own — SemanticChecker — with one visit_* per node kind, run on the whole tree before the code generator is constructed. It owns the symbol table now: name → declaration, and the declaration knows its type and whether it is mut. An expression visit returns the type it computed and stores it on the node (node.type); a name stores the declaration it resolved to (node.decl). That is the whole contract with Task 3: the generator reads those two fields and looks nothing up. The type rules • A decimal constant has the narrowest type it fits: 10 is i32, 3000000000 is i64, 99999999999999999999 is an error. • + - * take two integers; the result has the wider type (i32 + i64 is i64). A bool operand is an error. • == != take two integers (any mix) or two bools; the result is bool. A bool against an integer is an error. • An i32 value may initialise or be assigned to an i64 variable. Never the other way round; never bool into integer or integer into bool. • exit takes a constant or a variable of an integer type or of bool. Read the rules as widening only: the one conversion the language does for you is i32 → i64, and the pass records where it happens. The rules, line by line: i32 a{10} i64 b{20} i64 c{a + b} accepted: a + b is i64 i32 d{a + b} rejected: a + b is i64, and an i64 never narrows i32 e{a * 5} accepted: a * 5 stays i32 i64 f{a} accepted: an i32 widens into an i64 i32 g{b} rejected Errors the pass reports • line 2:9: cannot apply '+' to bool — at the operator • line 2:10: cannot compare bool with i32 — at the operator • line 2:5: cannot initialise 'c' of type i32 with a value of type i64 — at the name • line 3:1: cannot assign to 'x' of type i32 with a value of type i64 — at the name • line 1:7: constant 3000000000 does not fit in i32 — at the constant • line 1:6: cannot initialise 'b' of type bool with a value of type i32 • and the three you already have: used before its declaration, already declared, not mut — with the messages and positions they had in Practice 3. The wording is yours; the line:column, the exit code and the phase are not: all of these come out of the pass, none out of the generator. Skeleton class SemanticChecker: def __init__(self): self.symbols = {} # name -> DeclNode def visit_decl(self, node): if node.name in self.symbols: raise CompileError(...) # already declared node.init.accept(self) # before the name exists self.check_assignable(node.init, node.type_name, node, f"initialise '{node.name}'") self.symbols[node.name] = node def visit_binop(self, node): lt, rt = node.left.accept(self), node.right.accept(self) 3 if node.op in "+-*": ... # both integers, result = the wider one else: ... # both integers or both bools, result "bool" return node.type def visit_const(self, node): # i32 if it fits, else i64, else an error ... def check_assignable(self, expr, want, at, what): have = expr.type if have == want or (have == "i32" and want == "i64"): return raise CompileError(f"line {at.line}:{at.col}: cannot {what} of type {want} " f"with a value of type {have}") Every visit_var sets node.decl; every visit_assign sets node.decl too, after the mut check. The generator will thank you. Warning. Test the pass before touching the builder. Write the nine error programs first — one rule each — and read each message and position. A rule you got wrong here costs a minute; the same rule found as a wrong sext in the IR costs the afternoon. Show: five error programs, one per rule, rejected with line:column; then the same programs with the offending line fixed, accepted. TASK 3 — CODE GENERATION FROM A CHECKED TREE (1 POINT) add i32 %a, i64 %b does not exist: the builder refuses it, and if it did not, the CPU would add garbage. Every widening the checker allowed has to become an explicit sext at exactly that place — one missed conversion is the bug that shows up only with a value above two billion. The generator keeps its shape from Practice 3 and loses its checks. What it gains is types. An i64 variable is an alloca i64; a constant is emitted in the type the checker gave it; a bool is an i1. The one implicit conversion of the language is an explicit instruction here — sext from i32 to i64 — at exactly the places the checker allowed it: an initialiser, an assignment, both operands of + - *, both operands of == !=, the exit value. Put the conversion in one helper and call it from those five places: def coerce(self, value, have, want): if have == "i32" and want == "i64": return self.builder.sext(value, I64, name="wide") return value Try leaving one out. The builder refuses to add an i32 to an i64 at the moment you build the instruction, before any file exists — that message, not llc’s, is the one to read. Comparisons are icmp with a signed predicate (== / !=) on two operands of the same width — widen first — and produce the i1 a bool variable stores. exit prints an integer by widening it to i64 and passing it to printf with %lld; it prints a bool as true or false by choosing between two string constants with a select (no branches yet — those are next week). Tests tests/ok and tests/err with at least 6 programs each, named after the feature (i64_widen.txt, bool_compare.txt, narrowing_assign.txt), each with its .expected. Cover: a widening in an initialiser and inside +, a constant that only fits i64, a comparison of two integers of different widths, a comparison of two bools, a bool exit; a bool in arithmetic, each direction of narrowing, a constant that overflows, a bool compared with an integer, = alone. Your Practice 2 and 3 programs must still compile and print what they printed, and your test runner passes all of them. Show: the program of Task 1 through lli printing 385; exit e printing true; the sext line in output.ll; the output of your test runner. 4 SUBMISSION Two parts, both by the end of the third day after the practice. Show the teacher — during the practice, or within 3 days — from the practice-4 branch of your repository: --ast for the program of Task 1; five rejected programs with their line:column and the phase they were rejected in; 385 and true through lli; the output of your test runner. Submit in Moodle — the link to your repository, the link to the pull request from practice-4 into main with vovaskochko added as a reviewer, and ai_usage.txt with your AI log. Keep the code: the next practice adds blocks, and a block is first of all a scope in this pass. 5
-Response: Для того щоб виконати Task 1 повністю та коректно підготувати фронтенд (Лексер, АСТ та Парсер), у вашому поточному коді є кілька деструктивних помилок і пропущених деталей.
-Нижче наведено перелік усього, що вам потрібно виправити та додати, без прямого написання коду.
-1. Виправлення помилок у Лексері (Lexer)
-Критична помилка в іменах станів (Typo):
-У методі lex ви оголосили обробку elif state == "EQUALS":, але коли бачите символ =, ви переходите в state = "EQUAL" (в однині!). Через це стан EQUALS ніколи не викликається, а повторне =, швидше за все, падає з помилкою unexpected byte.
-Що зробити: Зведіть назву стану до одного варіанту (наприклад, "EQUAL").
-Обробка поодиноких = та !:
-Відповідно до специфікації Task 1, символи = та ! не можуть існувати окремо.
-Якщо після = або ! йде будь-який символ, відмінний від =, лексер має видавати лексичну помилку (наприклад: expected '==' (a single '=' is not an operator)).
-У вашому коді зараз при інших символах викидається за загальною схемою raise_err(10, ...). Вам потрібно додати гілку else, яка явно повідомляє про лексичну помилку відсутнього другого символу =.
-Підтримка true та false у OPERATORS / Ключових словах:
-Ви додали "true" та "false" до KEYWORDS зі значенням "bool_literal", але в parse_operand вони все ще не розпізнаються.
-2. Оновлення та виправлення Парсера (Parser)
-Головна точка входу для виразів (parse_expr vs parse_arith):
-У вашому parse_decl та parse_assignment викликається self.parse_arith().
-Помилка: Згідно з граматикою, вираз присвоєння або ініціалізації повинен мати можливість бути порівнянням (наприклад, bool d{a == 10}). Оскільки ви викликаєте parse_arith(), порівняння == та != просто ігноруються або викликають помилку unexpected token after statement.
-Що зробити: У parse_decl та parse_assignment змініть виклик з parse_arith() на parse_expr().
-Пріоритет операцій та рекурсивне групування: У специфікації чітко вказана така ієрархія пріоритетів (від найнижчого до найвищого):
-Рівень 1 (Вираз / Порівняння): expr ::= arith [ ("==" | "!=") arith ]
-Правило: Дозволено лише одне порівняння на вираз (без ланцюжків a == b == c).
-Рівень 2 (Додавання / Віднімання): arith ::= term { ("+" | "-") term }
-Правило: Лівоасоціативне групування.
-Рівень 3 (Множення): term ::= factor { "*" factor }
-Правило: Лівоасоціативне групування.
-Рівень 4 (Фактор / Операнд): factor ::= number | "true" | "false" | ident
-Що потрібно змінити в коді парсера:
-Перейменуйте або перебудуйте parse_operand на parse_factor.
-Додайте в parse_factor обробку булевих літералів (true та false). Для них краще створити окремий вузол AST (наприклад, BoolNode) або розширити ConstNode, щоб --ast міг відрізнити Bool true від звичайного константного числа.
-У parse_expr переконайтеся, що ви спочатку викликаєте parse_arith(), потім перевіряєте наявність == або !=. Якщо порівняння є — зчитуєте оператор і викликаєте parse_arith() для правої частини. Якщо після цього знову зустрічається оператор порівняння — потрібно викидати синтаксичну помилку (бо два порівняння поспіль заборонені).
-Оновлення вузлів AST для --ast (Task 1 Дамп):
-Вузлу DeclNode потрібно додати збереження типу (наприклад, self.type_name = ...) та прапорця mutable, а також оновити метод dump(), щоб він виводив тип і специфікатор (наприклад: Decl y i64 mut або Decl d bool const).
-Створіть вузол BoolNode(ExprNode) з методом dump(), який виводить Bool true або Bool false.
-3. Чек-лист для перевірки виконання Task 1
-Після внесення змін перевірте свій фронтенд на таких кейсах:
-Лексичні помилки (повинні переривати компіляцію з line:col):
-i32 a = 1 → має вказати на помилку через відсутність другої = у порівнянні/присвоєнні.
-bool b{!true} → має вказати на помилку через поодинокий !.
-Пріоритети операцій (AST структура):
-Вираз x * 2 != y + 5 повинен розпарситися як:
-BinOp !=
-Ліво: BinOp * (Var x, Const 2)
-Право: BinOp + (Var y, Const 5)
-Друк дерева для --ast:
-Для коду bool b{true} дамп має вивести відповідні вузли із зазначенням типу bool та значення Bool true.
-
-User prompt: перевір чи виконане перше завдання: from llvmlite import ir import llvmlite.binding as llvm import argparse import sys parser = argparse.ArgumentParser() parser.add_argument("source_path", help="path to the .txt file with your code") parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file") parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout") parser.add_argument("--ast", action="store_true", help="print the AST tree and exit") args = parser.parse_args() I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64) module = ir.Module(name="practice1") module.triple = llvm.get_default_triple() main = ir.Function(module, ir.FunctionType(I32, []), name="main") entry_block = main.append_basic_block("entry") builder = ir.IRBuilder(entry_block) printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf") text = b"Program exit with result %d\n\0" fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt") fmt.linkage, fmt.global_constant = "private", True fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text)) TYPES = { "i32": I32, "i64": I64, "bool": I8, } KEYWORDS = { "i32": "typename", "i64": "typename", "bool": "typename", "true": "bool_literal", "false": "bool_literal", "mut": "specifier", "exit": "statement", } def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable", 13: "expected '==' (a single '=' is not an operator)", 14: "expected '==' (a single '!' is not an operator)", } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (1, 2, 10, 11, 12) and ue_part: msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13) class Token: def __init__(self, kind, text, line, col): self.kind = kind self.text = text self.line = line self.col = col def to_str(self): return f"({self.kind}, {self.text}, {self.line}, {self.col})" def is_alpha(b): if (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_"): return True return False def is_digit(b): if ord("0") <= b <= ord("9"): return True return False def is_operator(b): if ord("*") == b or ord("+") == b or ord("-") == b: return True return False def lex(data: bytes): lexer_lines, tokens = [], [] state, start, line, col = "START", 0, 1, 1 open_brace_col = None start_col = 1 i = 0 while i <= len(data): b = data[i] if i < len(data) else None if state == "START": if b is None: break elif b in (32, 9): pass elif b == 10: if open_brace_col is not None: raise_err(9, line, open_brace_col) lexer_lines.append(tokens) tokens = [] line += 1; col = 0 elif is_alpha(b): state, start, start_col = "IDENT", i, col elif is_digit(b): state, start, start_col = "NUMBER", i, col elif b == ord("{"): tokens.append(Token("lbrace", "{", line, col)) open_brace_col = col elif b == ord("}"): tokens.append(Token("rbrace", "}", line, col)) open_brace_col = None elif b == ord(":"): state = "ASSIGN" start_col = col elif b == ord("!"): state = "NOTEQUAL" start_col = col elif b == ord("="): state = "EQUAL" start_col = col elif is_operator(b): tokens.append(Token("operator", chr(b), line, col)) else: raise_err(10, line, col, ue_part=chr(b)) elif state == "IDENT": if b is not None and (is_alpha(b) or is_digit(b)): pass else: word = data[start:i] tokens.append(Token(KEYWORDS.get(word.decode(), "ident"), word.decode(), line, start_col)) state = "START"; continue elif state == "NUMBER": if b is not None and is_digit(b): pass#braces elif b is not None and is_alpha(b): raise_err(10, line, col, ue_part = chr(b)) else: num = data[start:i] tokens.append(Token(KEYWORDS.get(num.decode(), "constant"), num.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "ASSIGN": if b == ord("="): tokens.append(Token("assignment", ":=", line, start_col)) state = "START" elif b is None: raise_err(10, line, col, ue_part="'end of file'") else: raise_err(10, line, col, ue_part=chr(b)) elif state == "EQUAL": if b == ord("="): tokens.append(Token("comparison","==", line, start_col)) state = "START" elif b is None: raise_err(13, line, start_col) else: raise_err(13, line, start_col) elif state == "NOTEQUAL": if b == ord("="): tokens.append(Token("comparison","!=", line, start_col)) state = "START" elif b is None: raise_err(14, line, start_col) else: raise_err(14, line, start_col) i += 1 col += 1 if tokens: lexer_lines.append(tokens) return lexer_lines class Node: def __init__(self, line, col): self.line, self.col = line, col class ProgramNode(Node): def __init__(self, line, col, stmts, exit_node): self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node def dump(self, indent=0): print(" " * indent + "Program") for stmt in self.stmts: stmt.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_program(self) class StmtNode(Node): pass class ExprNode(Node): pass class DeclNode(StmtNode): def __init__(self, line, col, type_name: str, name: str, mutable: bool, init): self.line, self.col = line, col self.type_name = type_name self.name = name self.mutable = mutable self.init = init def dump(self, indent=0): kind = "mut" if self.mutable else "const" print(" " * indent + f"Decl {self.name} {self.type_name} {kind}") self.init.dump(indent + 2) def accept(self, visitor): return visitor.visit_decl(self) class AssignNode(StmtNode): def __init__(self, line, col, name, value): self.line, self.col, self.name, self.value = line, col, name, value def dump(self, indent=0): print(" " * indent + f"Assign {self.name}") self.value.dump(indent + 2) def accept(self, visitor): return visitor.visit_assign(self) class BinOpNode(ExprNode): def __init__(self, line, col, op, left, right): self.line, self.col, self.op, self.left, self.right = line, col, op, left, right def dump(self, indent=0): print(" " * indent + f"BinOp {self.op}") self.left.dump(indent + 2) self.right.dump(indent + 2) def accept(self, visitor): return visitor.visit_binop(self) class VarNode(ExprNode): def __init__(self, line, col, name): self.line, self.col, self.name = line, col, name def dump(self, indent=0): print(" " * indent + f"Var {self.name}") def accept(self, visitor): return visitor.visit_var(self) class ConstNode(ExprNode): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Const {self.val}") def accept(self, visitor): return visitor.visit_const(self) class BoolNode(ExprNode): """AST node for boolean literals: true / false.""" def __init__(self, line, col, val: bool): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Bool {'true' if self.val else 'false'}") def accept(self, visitor): return visitor.visit_bool(self) class ExitNode(Node): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + "Exit") self.val.dump(indent + 2) def accept(self, visitor): return visitor.visit_exit(self) class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def parse_program(self): stmts = [] exit_node = None has_exit = False for line_toks in self.lines: if not line_toks: continue self.toks, self.pos = line_toks, 0 if has_exit: line, col = self.get_pos_info() raise_err(6, line, col) tok = self.peek() if tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) if self.peek() is not None: line, col = self.get_pos_info() if has_exit: raise_err(7, line, col) else: leftover = self.peek() raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement") if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, "expected statement, found end of line") if tok.kind == "typename": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() else: raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'") def parse_decl(self): type_tok = self.eat() # "i32" | "i64" | "bool" type_name = type_tok.text mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.expect("ident", "variable name") self.expect("lbrace", "'{'") init = self.parse_expr() self.expect("rbrace", "'}'") return DeclNode(name_tok.line, name_tok.col, type_name, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident self.expect("assignment", "':='") value = self.parse_expr() return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_arith(self): # arith ::= term { ("+" | "-") term } node = self.parse_term() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-": op_tok = self.eat() node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term()) return node def parse_term(self): # term ::= factor { "*" factor } node = self.parse_operand() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*": op_tok = self.eat() node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand()) return node def parse_expr(self): # expr ::= arith [ ("==" | "!=") arith ] node = self.parse_arith() if (tok := self.peek()) is not None and tok.kind == "comparison": op_tok = self.eat() return BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_arith()) return node def parse_operand(self, is_exit=False): # operand ::= ident | constant | "true" | "false" tok = self.peek() if tok is None: line, col = self.get_pos_info() if is_exit: raise_err(7, line, col) else: raise_syntax_err(line, col, "expected constant or variable, found end of line") if tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) elif tok.kind == "bool_literal": self.eat() return BoolNode(tok.line, tok.col, tok.text == "true") else: if is_exit: raise_err(7, tok.line, tok.col) else: raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'") class CodeGenVisitor: def __init__(self, builder, printf_func, fmt_global): self.builder = builder self.printf = printf_func self.fmt_global = fmt_global # Symbol table: name -> (alloca_ptr, is_mutable) self.symbols = {} def visit_program(self, node): for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) else: err_line = node.stmts[-1].line if node.stmts else node.line raise_err(5, err_line, 1) def _coerce(self, val, target_type, line, col): if val.type == target_type: return val src_bits = val.type.width dst_bits = target_type.width # i32 -> i64 is allowed; everything else is a type error if src_bits == 32 and dst_bits == 64: return self.builder.sext(val, target_type) raise_err(11, line, col, ue_part=f"type mismatch") def visit_decl(self, node): if node.name in self.symbols: raise_err(1, node.line, node.col, ue_part=f"'{node.name}'") llvm_type = TYPES.get(node.type_name) if llvm_type is None: raise_err(11, node.line, node.col, ue_part=f"'{node.type_name}'") init_val = node.init.accept(self) init_val = self._coerce(init_val, llvm_type, node.line, node.col) ptr = self.builder.alloca(llvm_type, name=node.name) self.builder.store(init_val, ptr) self.symbols[node.name] = (ptr, node.mutable) def visit_assign(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, is_mutable = self.symbols[node.name] if not is_mutable: raise_err(12, node.line, node.col, ue_part=f"'{node.name}'") # cannot assign to const val = node.value.accept(self) ptr_type = ptr.type.pointee val = self._coerce(val, ptr_type, node.line, node.col) self.builder.store(val, ptr) def visit_exit(self, node): val = node.val.accept(self) # GEP to get pointer to format string if val.type != I32: # widen i8 (bool) or i64 to i32 for printf %d if val.type.width < 32: val = self.builder.sext(val, I32) else: val = self.builder.trunc(val, I32) fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, val]) self.builder.ret(ir.Constant(I32, 0)) def visit_binop(self, node): left_val = node.left.accept(self) right_val = node.right.accept(self) if node.op in ("==", "!="): # operands must be same type (both int or both bool) if left_val.type != right_val.type: # allow i32 == i64: widen the narrower side lw, rw = left_val.type.width, right_val.type.width if lw < rw: left_val = self.builder.sext(left_val, right_val.type) else: right_val = self.builder.sext(right_val, left_val.type) cmp = self.builder.icmp_signed(node.op, left_val, right_val) return self.builder.zext(cmp, I8) # result is bool (i8) # arithmetic: both operands must be integers (i32 or i64), widen if needed lw = left_val.type.width rw = right_val.type.width if lw < rw: left_val = self.builder.sext(left_val, right_val.type) elif rw < lw: right_val = self.builder.sext(right_val, left_val.type) if node.op == "+": return self.builder.add(left_val, right_val) elif node.op == "-": return self.builder.sub(left_val, right_val) elif node.op == "*": return self.builder.mul(left_val, right_val) else: raise_err(8, node.line, node.col) def visit_var(self, node): if node.name not in self.symbols: raise_err(2, node.line, node.col, ue_part=f"'{node.name}'") # undeclared variable ptr, _ = self.symbols[node.name] return self.builder.load(ptr, name=node.name) def visit_const(self, node): return ir.Constant(I32, int(node.val)) def visit_bool(self, node): return ir.Constant(I8, 1 if node.val else 0) with open(args.source_path, "rb") as f: file_bytes = f.read() lines = lex(file_bytes) if args.tokens: for line in lines: for token in line: print(token.to_str() + " ") print() parser_obj = Parser(lines) ast = parser_obj.parse_program() if args.ast: ast.dump() sys.exit(0) codegen = CodeGenVisitor(builder, printf, fmt) ast.accept(codegen) if args.output_path: with open(args.output_path, "w") as out_f: out_f.write(str(module))
-Response: Більшість вимог Task 1 у наданому коді реалізована чудово (обробка типізації у фронтенді, двобайтові оператори ==/!=, підтримка bool_literal та оновлений вивід --ast), але є дві суттєві помилки, через які завдання зараз не буде зараховане повністю.
-1. Критична помилка у parse_term (Пріоритет операцій)
-У граматиці пріоритет операцій визначено так:
-arith ::= term { ("+" | "-") term }
-term ::= factor { "*" factor }
-factor ::= number | "true" | "false" | ident
-У вашому Parser.parse_term викликається self.parse_operand() замість self.parse_factor() чи повторного виклику операндів у контексті чистих факторів. Проте головна проблема в іншому: parse_expr зчитує parse_arith(), а той своєю чергою звертається до parse_term().
-Зараз у вас parse_term() виглядає так:
-def parse_term(self):
-    node = self.parse_operand() # <--- ТУТ ПОМИЛКА
-    while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*":
-        op_tok = self.eat()
-        node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
-    return node
-
-
-Якщо написати вираз x * 2 + y, то parse_term зчитає x, потім *, а далі викликає self.parse_operand(), зчитуючи 2. Оскільки далі йде +, parse_term повертає BinOp *.
-Але якщо вираз буде складнішим або перевірятиметься вкладеність факторів, parse_operand() обмежує розширення. Основна проблема проявляється при спробі прочитати порівняння або вираз, де операція множення має бути найтіснішою групою.
-2. Заборона ланцюгових порівнянь у parse_expr (Невідповідність специфікації)
-Згідно з умовами Task 1:
-"One comparison per expression, and it binds weaker than arithmetic"
-У вашому parse_expr() стоїть простий if:
-def parse_expr(self):
-    node = self.parse_arith()
-    if (tok := self.peek()) is not None and tok.kind == "comparison":
-        op_tok = self.eat()
-        return BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_arith())
-    return node
-
-
-Якщо вхідний код містить два порівняння поспіль (наприклад, a == b == c або x != y == true), ваш парсер зчитає перше порівняння a == b, а другий оператор == c залишиться нерозпарсеним у токенах рядка.
-Це призведе до помилки unexpected '==' after statement замість синтаксичної помилки або заборони кількох порівнянь в одному виразі під час аналізу виразу.
-Що потрібно виправити: Після зчитування першого порівняння та правої частини parse_arith(), потрібно перевірити, чи не йде наступним токеном ще один токен типу "comparison". Якщо йде — одразу піднімати синтаксичну помилку (наприклад, raise_syntax_err(..., "multiple comparisons in one expression are not allowed")).
-3. Формати Друків у DeclNode.dump()
-У Task 1 зазначено вимога до --ast:
-Decl y i64 mut
-Decl d bool const
-Bool true
-
-
-Ваш DeclNode.dump() зараз друкує:
-kind = "mut" if self.mutable else "const"
-print(" " * indent + f"Decl {self.name} {self.type_name} {kind}")
+Список виправлень у компіляторі
+https://gemini.google.com/app/290bf6196c084362
+
+User prompt: випиши коротше що треба випраивти: Checked on clean checkout: --ast for the warm-up program matches the sheet, 15, true and 20 through lli, the phi from opt -passes=mem2reg, every alloca in entry, the generator now keys slots by node.decl, Practice 3/4 programs still give 120 and 385, while gives 55, your runner gives 64/64. Shadowing with another type, an i64 shadow of an i32 read after the block, !!c and five levels of nesting: all correct. The Practice 4 review points are fixed. What to fix: 1. Two errors from the sheet come out at a different column. i32 x{1} then if x gives line 2:4: if condition must be bool, got i32; the sheet reports it at the if, line 2:1. bool b{!x} gives line 2:9: '!' requires bool operand, got i32; the sheet reports it at the !, line 2:8 (compiler.py:767 adds 1 to the column of !). 2. When both arms exit, the program's last exit is rejected: bool c{false} / if c / { / exit 1 / } / else / { / exit 2 / } / exit 3 gives line 10:1: exit must be the last statement instead of Program exit with result 2. The grammar stays program ::= { statement } exit: the merge block has no predecessor but still gets the last exit. guarantees_exit (compiler.py:387) makes the opposite rule, and tests/ok/exit_in_arm.txt has no final exit. 3. --ast prints Else at the level of If (compiler.py:353), so an if/else looks like two statements. In the sheet If has the condition, the then-block and the optional else-block as its children: If / Var b / Block ... / Block .... Small thing: 4. The submission asks for .ast files for the new programs; tests/ok has none.
+Response:
+Колонки у помилках:
+if x: видає 2:4 замість 2:1 (має бути колонка початку if).
+!x: видає 2:9 замість 2:8 (прибрати зайву +1 до колонки оператора ! у compiler.py:767).
+exit після if/else з виходом в обох гілках:
+Якщо і then, і else містять exit, наступний exit викликає помилку ("exit must be the last statement") замість нормального завершення.
+Потрібно виправити guarantees_exit та обробку недосяжного merge-блоку без попередників у compiler.py:387.
+Вкладеність Else в AST (--ast):
+Зараз Else виводиться як окремий сусідній вузол поруч із If (compiler.py:353).
+Має бути дочірнім вузлом If (структура: If → умова, then-блок, optional else-блок).
+Файли .ast:
+Згенерувати та додати відсутні .ast файли для нових програм у папці tests/ok/.
+
+User prompt: для if мені промсто треба прибрати тут реальний номер колонки і поставити 1? ось весь код: from llvmlite import ir import llvmlite.binding as llvm import argparse import sys parser = argparse.ArgumentParser() parser.add_argument("source_path", help="path to the .txt file with your code") parser.add_argument("output_path", nargs="?", default=None, help="path to the .ll file") parser.add_argument("--tokens", action="store_true", help="print the token stream to stdout") parser.add_argument("--ast", action="store_true", help="print the AST tree and exit") args = parser.parse_args() I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64) I1 = ir.IntType(1) module = ir.Module(name="practice1") module.triple = llvm.get_default_triple() main = ir.Function(module, ir.FunctionType(I32, []), name="main") entry_block = main.append_basic_block("entry") builder = ir.IRBuilder(entry_block) printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf") text = b"Program exit with result %lld\n\0" fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt") fmt.linkage, fmt.global_constant = "private", True fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text)) text_bool = b"Program exit with result %s\n\0" fmt_bool = ir.GlobalVariable(module, ir.ArrayType(I8, len(text_bool)), name="fmt_bool") fmt_bool.linkage, fmt_bool.global_constant = "private", True fmt_bool.initializer = ir.Constant(ir.ArrayType(I8, len(text_bool)), bytearray(text_bool)) true_str = b"true\0" fmt_true = ir.GlobalVariable(module, ir.ArrayType(I8, len(true_str)), name="true_str") fmt_true.linkage, fmt_true.global_constant = "private", True fmt_true.initializer = ir.Constant(ir.ArrayType(I8, len(true_str)), bytearray(true_str)) false_str = b"false\0" fmt_false = ir.GlobalVariable(module, ir.ArrayType(I8, len(false_str)), name="false_str") fmt_false.linkage, fmt_false.global_constant = "private", True fmt_false.initializer = ir.Constant(ir.ArrayType(I8, len(false_str)), bytearray(false_str)) TYPES = { "i32": I32, "i64": I64, "bool": I1, } KEYWORDS = { "i32": "typename", "i64": "typename", "bool": "typename", "true": "bool_literal", "false": "bool_literal", "mut": "specifier", "exit": "statement", "if": "keyword", "else": "keyword", "while": "keyword", } def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable", 13: "expected '==' (a single '=' is not an operator)", } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (1, 2, 10, 11, 12) and ue_part: msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13) class Token: def __init__(self, kind, text, line, col): self.kind = kind self.text = text self.line = line self.col = col def to_str(self): return f"({self.kind}, {self.text}, {self.line}, {self.col})" def is_alpha(b): if (ord("A") <= b <= ord("Z")) or (ord("a") <= b <= ord("z")) or b == ord("_"): return True return False def is_digit(b): if ord("0") <= b <= ord("9"): return True return False def is_operator(b): if ord("*") == b or ord("+") == b or ord("-") == b: return True return False def lex(data: bytes): lexer_lines, tokens = [], [] state, start, line, col = "START", 0, 1, 1 start_col = 1 i = 0 while i <= len(data): b = data[i] if i < len(data) else None if state == "START": if b is None: break elif b in (32, 9): pass elif b == 10: lexer_lines.append(tokens) tokens = [] line += 1; col = 0 elif is_alpha(b): state, start, start_col = "IDENT", i, col elif is_digit(b): state, start, start_col = "NUMBER", i, col elif b == ord("{"): tokens.append(Token("lbrace", "{", line, col)) elif b == ord("}"): tokens.append(Token("rbrace", "}", line, col)) elif b == ord(":"): state = "ASSIGN" start_col = col elif b == ord("!"): state = "NOTEQUAL" start_col = col elif b == ord("="): state = "EQUAL" start_col = col elif is_operator(b): tokens.append(Token("operator", chr(b), line, col)) else: raise_err(10, line, col, ue_part=chr(b)) elif state == "IDENT": if b is not None and (is_alpha(b) or is_digit(b)): pass else: word = data[start:i] tokens.append(Token(KEYWORDS.get(word.decode(), "ident"), word.decode(), line, start_col)) state = "START"; continue elif state == "NUMBER": if b is not None and is_digit(b): pass#braces elif b is not None and is_alpha(b): raise_err(10, line, col, ue_part = chr(b)) else: num = data[start:i] tokens.append(Token(KEYWORDS.get(num.decode(), "constant"), num.decode(), line, start_col)) state = "START"; continue # re-read this byte in START elif state == "ASSIGN": if b == ord("="): tokens.append(Token("assignment", ":=", line, start_col)) state = "START" elif b is None: raise_err(10, line, col, ue_part="'end of file'") else: raise_err(10, line, col, ue_part=chr(b)) elif state == "EQUAL": if b == ord("="): tokens.append(Token("comparison","==", line, start_col)) state = "START" elif b is None: raise_err(13, line, start_col) else: raise_err(13, line, start_col) elif state == "NOTEQUAL": if b == ord("="): tokens.append(Token("comparison","!=", line, start_col)) state = "START" else: # bare '!' — re-read the current byte in START tokens.append(Token("operator", "!", line, start_col)) state = "START" continue i += 1 col += 1 if tokens: lexer_lines.append(tokens) return lexer_lines class Node: def __init__(self, line, col): self.line, self.col = line, col class ProgramNode(Node): def __init__(self, line, col, stmts, exit_node): self.line, self.col, self.stmts, self.exit = line, col, stmts, exit_node def dump(self, indent=0): print(" " * indent + "Program") for stmt in self.stmts: stmt.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_program(self) class StmtNode(Node): pass class ExprNode(Node): pass class DeclNode(StmtNode): def __init__(self, line, col, type_name: str, name: str, mutable: bool, init): self.line, self.col = line, col self.type_name = type_name self.name = name self.mutable = mutable self.init = init def dump(self, indent=0): kind = "mut" if self.mutable else "const" print(" " * indent + f"Decl {self.name} {self.type_name} {kind}") self.init.dump(indent + 2) def accept(self, visitor): return visitor.visit_decl(self) class AssignNode(StmtNode): def __init__(self, line, col, name, value): self.line, self.col, self.name, self.value = line, col, name, value def dump(self, indent=0): print(" " * indent + f"Assign {self.name}") self.value.dump(indent + 2) def accept(self, visitor): return visitor.visit_assign(self) class BinOpNode(ExprNode): def __init__(self, line, col, op, left, right): self.line, self.col, self.op, self.left, self.right = line, col, op, left, right def dump(self, indent=0): print(" " * indent + f"BinOp {self.op}") self.left.dump(indent + 2) self.right.dump(indent + 2) def accept(self, visitor): return visitor.visit_binop(self) class VarNode(ExprNode): def __init__(self, line, col, name): self.line, self.col, self.name = line, col, name def dump(self, indent=0): print(" " * indent + f"Var {self.name}") def accept(self, visitor): return visitor.visit_var(self) class ConstNode(ExprNode): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Const {self.val}") def accept(self, visitor): return visitor.visit_const(self) class BoolNode(ExprNode): """AST node for boolean literals: true / false.""" def __init__(self, line, col, val: bool): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + f"Bool {'true' if self.val else 'false'}") def accept(self, visitor): return visitor.visit_bool(self) class NotNode(ExprNode): def __init__(self, line, col, operand): self.line, self.col, self.operand = line, col, operand def dump(self, indent=0): print(" " * indent + "Not") self.operand.dump(indent + 2) def accept(self, visitor): return visitor.visit_not(self) class BlockNode(Node): def __init__(self, line, col, stmts, exit_node = None): self.line, self.col = line, col self.stmts = stmts self.exit = exit_node def dump(self, indent=0): print(" " * indent + "Block") for s in self.stmts: s.dump(indent + 2) if self.exit: self.exit.dump(indent + 2) def accept(self, visitor): return visitor.visit_block(self) class IfNode(StmtNode): def __init__(self, line, col, condition, then_block, else_block = None): self.line, self.col = line, col self.condition = condition self.then_block = then_block self.else_block = else_block def dump(self, indent=0): print(" " * indent + "If") self.condition.dump(indent + 2) self.then_block.dump(indent + 2) if self.else_block: print(" " * indent + "Else") self.else_block.dump(indent + 2) def accept(self, visitor): return visitor.visit_if(self) class WhileNode(StmtNode): def __init__(self, line, col, condition, body_block): self.line, self.col = line, col self.condition = condition self.body_block = body_block def dump(self, indent=0): print(" " * indent + "While") self.condition.dump(indent + 2) self.body_block.dump(indent + 2) def accept(self, visitor): return visitor.visit_while(self) class ExitNode(Node): def __init__(self, line, col, val): self.line, self.col, self.val = line, col, val def dump(self, indent=0): print(" " * indent + "Exit") self.val.dump(indent + 2) def accept(self, visitor): return visitor.visit_exit(self) def guarantees_exit(node): if node is None: return False if isinstance(node, ExitNode): return True if isinstance(node, BlockNode): if node.exit is not None: return True for s in node.stmts: if guarantees_exit(s): return True return False if isinstance(node, IfNode): if node.else_block is None: return False return guarantees_exit(node.then_block) and guarantees_exit(node.else_block) return False class Parser: def __init__(self, lines): self.lines = lines self.toks = [] self.pos = 0 self.line_pos = 0 def peek_line(self): while self.line_pos < len(self.lines) and not self.lines[self.line_pos]: self.line_pos += 1 return self.lines[self.line_pos] if self.line_pos < len(self.lines) else None def next_line(self): while self.line_pos < len(self.lines) and not self.lines[self.line_pos]: self.line_pos += 1 if self.line_pos < len(self.lines): toks = self.lines[self.line_pos] self.line_pos += 1 self.toks, self.pos = toks, 0 return True self.toks, self.pos = [], 0 return False def peek(self): return self.toks[self.pos] if self.pos < len(self.toks) else None def eat(self): tok = self.toks[self.pos] self.pos += 1 return tok def expect(self, kind, what_expected): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, f"expected {what_expected}, found end of line") if tok.kind != kind: raise_syntax_err(tok.line, tok.col, f"expected {what_expected}, got '{tok.text}'") return self.eat() def get_pos_info(self): tok = self.peek() if tok: return tok.line, tok.col if self.toks: last = self.toks[-1] return last.line, last.col + len(last.text) return 1, 1 def expect_eol(self): if self.peek() is not None: tok = self.peek() raise_syntax_err(tok.line, tok.col, f"unexpected '{tok.text}' after statement") # ── top-level ────────────────────────────────────────────────────── def parse_program(self): stmts = [] exit_node = None has_exit = False while self.peek_line() is not None: if has_exit: nxt = self.peek_line() raise_err(6, nxt[0].line, nxt[0].col) self.next_line() tok = self.peek() if tok is not None and tok.kind == "statement" and tok.text == "exit": exit_node = self.parse_exit() self.expect_eol() has_exit = True else: stmt_node = self.parse_statement() stmts.append(stmt_node) # if/block statements already consumed all their lines; # single-line statements: check nothing is left if not isinstance(stmt_node, (IfNode, WhileNode)): self.expect_eol() if guarantees_exit(stmt_node): has_exit = True if not has_exit: err_line = self.lines[-1][-1].line if (self.lines and self.lines[-1]) else 1 raise_err(5, err_line, 1) first_line = stmts[0].line if stmts else (exit_node.line if exit_node else 1) first_col = stmts[0].col if stmts else (exit_node.col if exit_node else 1) return ProgramNode(first_line, first_col, stmts, exit_node) def parse_statement(self): tok = self.peek() if tok is None: line, col = self.get_pos_info() raise_syntax_err(line, col, "expected statement, found end of line") if tok.kind == "typename": return self.parse_decl() elif tok.kind == "ident": return self.parse_assignment() elif tok.kind == "keyword" and tok.text == "if": return self.parse_if() elif tok.kind == "keyword" and tok.text == "while": return self.parse_while() else: raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'") def parse_decl(self): type_tok = self.eat() # "i32" | "i64" | "bool" type_name = type_tok.text mutable = False tok = self.peek() if tok is not None and tok.kind == "specifier" and tok.text == "mut": self.eat() mutable = True name_tok = self.expect("ident", "variable name") self.expect("lbrace", "'{'") init = self.parse_expr() self.expect("rbrace", "'}'") return DeclNode(name_tok.line, name_tok.col, type_name, name_tok.text, mutable, init) def parse_assignment(self): var_tok = self.eat() # ident self.expect("assignment", "':='") value = self.parse_expr() return AssignNode(var_tok.line, var_tok.col, var_tok.text, value) def parse_exit(self): exit_tok = self.eat() # "exit" val = self.parse_operand(is_exit=True) return ExitNode(exit_tok.line, exit_tok.col, val) def parse_arith(self): # arith ::= term { ("+" | "-") term } node = self.parse_term() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-": op_tok = self.eat() node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term()) return node def parse_term(self): # term ::= factor { "*" factor } node = self.parse_operand() while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text == "*": op_tok = self.eat() node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand()) return node def parse_expr(self): # expr ::= arith [ ("==" | "!=") arith ] node = self.parse_arith() if (tok := self.peek()) is not None and tok.kind == "comparison": op_tok = self.eat() right = self.parse_arith() if (tok2 := self.peek()) is not None and tok2.kind == "comparison": raise_syntax_err(tok2.line, tok2.col, "multiple comparisons in one expression are not allowed") return BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, right) return node def parse_operand(self, is_exit=False): # operand ::= ident | constant | "true" | "false" tok = self.peek() if tok is None: line, col = self.get_pos_info() if is_exit: raise_err(7, line, col) else: raise_syntax_err(line, col, "expected constant or variable, found end of line") if tok.kind == "operator" and tok.text == "!": bang = self.eat() operand = self.parse_operand(is_exit=is_exit) return NotNode(bang.line, bang.col, operand) elif tok.kind == "ident": self.eat() return VarNode(tok.line, tok.col, tok.text) elif tok.kind == "constant": self.eat() return ConstNode(tok.line, tok.col, tok.text) elif tok.kind == "bool_literal": self.eat() return BoolNode(tok.line, tok.col, tok.text == "true") else: if is_exit: raise_err(7, tok.line, tok.col) else: raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'") def parse_if(self): # if ::= "if" expr NL block [ "else" NL block ] if_tok = self.eat() # 'if' condition = self.parse_expr() self.expect_eol() # nothing after the condition on that line then_block = self.parse_block() # peek at the next line for an optional 'else' nxt = self.peek_line() else_block = None if nxt is not None and nxt[0].kind == "keyword" and nxt[0].text == "else": self.next_line() self.eat() # consume 'else' self.expect_eol() # nothing after 'else' on that line else_block = self.parse_block() return IfNode(if_tok.line, if_tok.col, condition, then_block, else_block) def parse_while(self): # while ::= "while" expr NL block while_tok = self.eat() # 'while' condition = self.parse_expr() self.expect_eol() # nothing after the condition on that line body_block = self.parse_block() return WhileNode(while_tok.line, while_tok.col, condition, body_block) def parse_block(self): # block ::= "{" NL { statement } [ exit NL ] "}" NL # The '{' must be on its own line (the line after 'if'/'else'). nxt = self.peek_line() if nxt is None or nxt[0].kind != "lbrace": if nxt: raise_syntax_err(nxt[0].line, nxt[0].col, "expected '{'") else: raise_syntax_err(0, 0, "expected '{', found end of file") self.next_line() lbrace_tok = self.eat() # '{' self.expect_eol() # nothing after '{' stmts = [] exit_node = None has_exit = False while True: nxt = self.peek_line() if nxt is None: raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block opened here is never closed") if nxt[0].kind == "rbrace": break self.next_line() tok = self.peek() if tok.kind == "statement" and tok.text == "exit": if has_exit: raise_err(6, tok.line, tok.col) exit_node = self.parse_exit() self.expect_eol() has_exit = True else: if has_exit: raise_err(6, tok.line, tok.col) stmt = self.parse_statement() stmts.append(stmt) if not isinstance(stmt, (IfNode, WhileNode)): self.expect_eol() if guarantees_exit(stmt): has_exit = True # consume the '}' line self.next_line() self.eat() # '}' self.expect_eol() # nothing after '}' if not stmts and exit_node is None: raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block must not be empty") return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node) class SemanticChecker: def __init__(self): self.scopes = [{}] # stack of frames (dicts): name -> DeclNode def lookup(self, node, name): for frame in reversed(self.scopes): if name in frame: return frame[name] raise_err(2, node.line, node.col, ue_part=f"'{name}'") def _sem_err(self, line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(15) def _check_assignable(self, expr, want_type, at_node, what): """Verify expr.type can go into a variable of want_type.""" have = expr.type if have == want_type: return if have == "i32" and want_type == "i64": return # only widening allowed # constant that is too large for the declared integer type if isinstance(expr, ConstNode) and want_type in ("i32", "i64"): self._sem_err(expr.line, expr.col, f"constant {expr.val} does not fit in {want_type}") self._sem_err(at_node.line, at_node.col, f"cannot {what} of type {want_type} with a value of type {have}") def visit_program(self, node): self.scopes = [{}] for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) def visit_decl(self, node): top_frame = self.scopes[-1] if node.name in top_frame: raise_err(1, node.line, node.col, ue_part=f"'{node.name}'") node.init.accept(self) # resolve before the name enters scope self._check_assignable(node.init, node.type_name, node, f"initialise '{node.name}'") top_frame[node.name] = node def visit_assign(self, node): decl = self.lookup(node, node.name) node.decl = decl if not decl.mutable: raise_err(12, node.line, node.col, ue_part=f"'{node.name}'") node.value.accept(self) self._check_assignable(node.value, decl.type_name, node, f"assign to '{node.name}'") def visit_exit(self, node): node.val.accept(self) # exit accepts integer or bool; any declared type is fine here def visit_if(self, node): cond_type = node.condition.accept(self) if cond_type != "bool": self._sem_err(node.condition.line, node.condition.col, f"if condition must be bool, got {cond_type}") node.then_block.accept(self) if node.else_block: node.else_block.accept(self) def visit_while(self, node): cond_type = node.condition.accept(self) if cond_type != "bool": self._sem_err(node.line, node.col, f"while condition must be bool, got {cond_type}") node.body_block.accept(self) def visit_block(self, node): self.scopes.append({}) for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) self.scopes.pop() def visit_not(self, node): t = node.operand.accept(self) if t != "bool": self._sem_err(node.line, node.col, f"'!' requires bool operand, got {t}") node.type = "bool" return node.type def visit_binop(self, node): lt = node.left.accept(self) rt = node.right.accept(self) if node.op in ("+", "-", "*"): # arithmetic: both must be integers if lt == "bool": self._sem_err(node.line, node.col, f"cannot apply '{node.op}' to bool") if rt == "bool": self._sem_err(node.line, node.col, f"cannot apply '{node.op}' to bool") # result is the wider type node.type = "i64" if (lt == "i64" or rt == "i64") else "i32" else: # == or != # both must be integers (any mix) or both bools both_bool = (lt == "bool" and rt == "bool") both_int = (lt in ("i32", "i64") and rt in ("i32", "i64")) if not (both_bool or both_int): self._sem_err(node.line, node.col, f"cannot compare {lt} with {rt}") node.type = "bool" return node.type def visit_var(self, node): decl = self.lookup(node, node.name) node.decl = decl node.type = decl.type_name return node.type def visit_const(self, node): val = int(node.val) I32_MAX = 2**31 - 1 I64_MAX = 2**63 - 1 if val <= I32_MAX: node.type = "i32" elif val <= I64_MAX: node.type = "i64" else: self._sem_err(node.line, node.col, f"constant {node.val} does not fit in i64") return node.type def visit_bool(self, node): node.type = "bool" return node.type class CodeGenVisitor: def __init__(self, builder, printf_func, fmt_global): self.builder = builder self.printf = printf_func self.fmt_global = fmt_global # Symbol table: decl node -> alloca_ptr self.symbols = {} def visit_program(self, node): for stmt in node.stmts: stmt.accept(self) if node.exit: node.exit.accept(self) if not self.builder.block.is_terminated: self.builder.unreachable() def coerce(self, value, have, want): if have == "i32" and want == "i64": return self.builder.sext(value, I64, name="wide") return value def alloca_in_entry(self, typ, name): entry_bb = self.builder.function.entry_basic_block curr_bb = self.builder.block if entry_bb.instructions: self.builder.position_before(entry_bb.instructions[0]) else: self.builder.position_at_end(entry_bb) ptr = self.builder.alloca(typ, name=name) self.builder.position_at_end(curr_bb) return ptr def visit_decl(self, node): llvm_type = TYPES[node.type_name] init_val = node.init.accept(self) init_val = self.coerce(init_val, node.init.type, node.type_name) ptr = self.alloca_in_entry(llvm_type, node.name) self.builder.store(init_val, ptr) self.symbols[node] = ptr def visit_assign(self, node): ptr = self.symbols[node.decl] val = node.value.accept(self) val = self.coerce(val, node.value.type, node.decl.type_name) self.builder.store(val, ptr) def visit_exit(self, node): val = node.val.accept(self) have = node.val.type if have == "bool": true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) str_ptr = self.builder.select(val, true_ptr, false_ptr) fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, str_ptr]) else: val = self.coerce(val, have, "i64") fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)]) self.builder.call(self.printf, [fmt_ptr, val]) self.builder.ret(ir.Constant(I32, 0)) def visit_not(self, node): val = node.operand.accept(self) # !bool: xor with 1 (i1) return self.builder.xor(val, ir.Constant(I1, 1), name="not") def visit_if(self, node): cond = node.condition.accept(self) then_bb = self.builder.function.append_basic_block("then") else_bb = self.builder.function.append_basic_block("else") if а випраивти треба ось в цьому місці: def visit_if(self, node): cond_type = node.condition.accept(self) if cond_type != "bool": self._sem_err(node.condition.line, node.condition.col, f"if condition must be bool, got {cond_type}") node.then_block.accept(self) if node.else_block: node.else_block.accept(self)
+Response: Ні, ставити жорстко 1 не варто — це зламається, якщо конструкція if буде написана з відступами (наприклад, всередині вкладеного блоку).
+Замість node.condition.line, node.condition.col (які вказують на сам вираз умови x) передавайте node.line, node.col (які зберігають координати початку ключового слова if).
+Виправлений фрагмент visit_if:
+    def visit_if(self, node):
+        cond_type = node.condition.accept(self)
+        if cond_type != "bool":
+            self._sem_err(node.line, node.col,
+                          f"if condition must be bool, got {cond_type}")
+        node.then_block.accept(self)
+        if node.else_block:
+            node.else_block.accept(self)
+
+
+
+User prompt: а щодо третього коментаря треба виправити так? def dump(self, indent=0): print(" " * indent + "If") self.condition.dump(indent + 2) self.then_block.dump(indent + 2) if self.else_block: print(" " * indent + 2 + "Else") self.else_block.dump(indent + 2)
+Response: Ні, в такому коді є дві проблеми:
+За вимогоЮ завдання (з листа/sheet): Рядок "Else" взагалі не повинен друкуватися. Вузол If має містити блок else безпосередньо як свій третій дочірній елемент (структура: If → condition, then-block, else-block).
+Синтаксична помилка Python: Рядок " " * indent + 2 + "Else" викликає TypeError, оскільки ви намагаєтеся додати число 2 до рядка.
+Правильний варіант:
+Просто приберіть print(...) для Else і викликайте .dump(indent + 2) безпосередньо для self.else_block:
+    def dump(self, indent=0):
+        print(" " * indent + "If")
+        self.condition.dump(indent + 2)
+        self.then_block.dump(indent + 2)
+        if self.else_block:
+            self.else_block.dump(indent + 2)
+
+
+
+User prompt: це ок правило для додавання структури в граматику: struct ::= "struct" ident NL "{" {type [ "mut" ] ident NL} "}" і тоді type ::= "i32" | "i64" | "bool" | імʼя нової створеної структури, але як це записати правильно
+Response: Загалом ідея правильна, але у граматиці варто врахувати кілька важливих нюансів (зокрема переводи рядків NL після { та розділення синтаксису й семантики).
+1. Як правильно записати type
+У формальній граматиці (EBNF) парсер на етапі синтаксичного аналізу ще не знає, які саме структури були оголошені — для нього ім'я будь-якої структури це просто ідентифікатор (ident).
+Тому тип записується так:
+type ::= "i32" | "i64" | "bool" | ident
+
+
+Якщо хочеться зробити граматику більш наочною та семантично виразною:
+primitive_type ::= "i32" | "i64" | "bool"
+struct_type    ::= ident
+type           ::= primitive_type | struct_type
+
+
+Перевірка того, чи існує структура з таким ident, покладається вже на семантичний аналізатор (SemanticChecker), а не на синтаксичний парсер.
+2. Уточнення правила для struct
+Оскільки у вашій мові після відкриваючої дужки { іде перехід на новий рядок (як у блоках If / While), перевід рядка NL має бути і одразу після {:
+struct_def ::= "struct" ident NL "{" NL { field_decl } "}" NL
+field_decl ::= type [ "mut" ] ident NL
+
+
+Або в один суцільний запис:
+struct_def ::= "struct" ident NL "{" NL { type [ "mut" ] ident NL } "}" NL
+
+
+Що варто врахувати при реалізації в коді
+Лексер (KEYWORDS):
+Додати "struct" до словника KEYWORDS як "keyword".
+Парсер (Parser):
+При розборі parse_type() парсер перевіряє, чи є токен typename (i32, i64, bool) або ident. Якщо це ident, парсер приймає його як назву типу структури.
+Семантика (SemanticChecker):
+Оголошення структур struct_def має оброблятися раніше або збиратися в таблицю типів (структур), щоб при перевірці полів чи змінних типу ident перевіряти, чи існує така структура у таблиці.
+
+User prompt: а як тоді краще це реалізувати, створити типу якийсь пустий стисок чи словник з назвами структур щоб потім перевіряти цей тип чи можна його змінювати та що саме там можна змінювати?
+Response: Найкраще створити словник типів (таблицю структур), де ключем є назва структури, а значенням — спеціальний об'єкт (або словник) з описом її полів.
+Для зручності семантичного аналізу та створення кода в LLVM IR у кожному полі варто зберігати:
+Назву та тип поля.
+Прапорець модифікованості (mutable).
+Порядковий індекс поля (index) — він потрібен для генерації LLVM IR інструкції gep (GetElementPointer).
+1. Структура даних для опису полів та типів
+Створіть класи-контейнери для метаданих:
+class FieldInfo:
+    def __init__(self, name: str, type_name: str, mutable: bool, index: int):
+        self.name = name
+        self.type_name = type_name
+        self.mutable = mutable
+        self.index = index  # 0, 1, 2... для LLVM GEP
+
+class StructInfo:
+    def __init__(self, name: str, fields: dict):
+        self.name = name
+        self.fields = fields  # dict: field_name -> FieldInfo
+
+
+2. Реалізація в SemanticChecker
+У SemanticChecker додається словник self.structs:
+class SemanticChecker:
+    def __init__(self):
+        self.scopes = [{}]
+        self.structs = {}  # struct_name -> StructInfo
+
+    def visit_struct_def(self, node):
+        if node.name in self.structs or node.name in ("i32", "i64", "bool"):
+            self._sem_err(node.line, node.col, f"type '{node.name}' is already defined")
+
+        fields = {}
+        for idx, field_ast in enumerate(node.fields):
+            # Перевірка, чи тип поля існує (примітивний або вже оголошена структура)
+            if field_ast.type_name not in ("i32", "i64", "bool") and field_ast.type_name not in self.structs:
+                self._sem_err(field_ast.line, field_ast.col, f"unknown type '{field_ast.type_name}'")
+
+            # Перевірка на дублікати полів у структурі
+            if field_ast.name in fields:
+                self._sem_err(field_ast.line, field_ast.col, f"duplicate field '{field_ast.name}' in struct '{node.name}'")
+
+            fields[field_ast.name] = FieldInfo(
+                name=field_ast.name,
+                type_name=field_ast.type_name,
+                mutable=field_ast.mutable,
+                index=idx
+            )
+
+        self.structs[node.name] = StructInfo(node.name, fields)
+
+
+3. Перевірка доступу та присвоєння до полів (s.x := ... або s.x)
+Для доступу до поля зазвичай додають AST-вузол FieldAccessNode(obj_expr, field_name).
+При отриманні значення (visit_field_access):
+def visit_field_access(self, node):
+    # Спочатку визначаємо тип об'єкта s
+    obj_type = node.obj.accept(self)
+
+    if obj_type not in self.structs:
+        self._sem_err(node.line, node.col, f"type '{obj_type}' is not a struct")
+
+    struct_info = self.structs[obj_type]
+    if node.field_name not in struct_info.fields:
+        self._sem_err(node.line, node.col, f"struct '{obj_type}' has no field '{node.field_name}'")
+
+    field = struct_info.fields[node.field_name]
+    node.field_info = field  # зберігаємо посилання для CodeGen
+    node.type = field.type_name
+    return node.type
+
+
+При присвоєнні значення у поле (visit_field_assign):
+def visit_field_assign(self, node):
+    # node: s.x := expr
+    obj_type = node.obj.accept(self)
+    
+    if obj_type not in self.structs:
+        self._sem_err(node.line, node.col, f"type '{obj_type}' is not a struct")
+
+    struct_info = self.structs[obj_type]
+    if node.field_name not in struct_info.fields:
+        self._sem_err(node.line, node.col, f"struct '{obj_type}' has no field '{node.field_name}'")
+
+    field = struct_info.fields[node.field_name]
+
+    # Перевірка на можливість зміни (mutability)
+    if not field.mutable:
+        self._sem_err(node.line, node.col, f"cannot assign to immutable field '{node.field_name}' of struct '{obj_type}'")
+
+    val_type = node.value.accept(self)
+    self._check_assignable(node.value, field.type_name, node, f"assign to field '{node.field_name}'")
+
+
+4. Генерація коду (LLVM IR)
+У генераторі коду (CodeGenVisitor) словник structs поверне індекс поля для інструкції gep:
+# Отримання вказівника на конкретне поле структури:
+# ptr — це alloca-вказівник на саму структуру
+field_ptr = builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, field_info.index)])
+
+
+
+User prompt: я ж правильно розумію що для цього завдання у нас має в граматиці додана функція що є по факту ident args block TASK 2 — FUNCTIONS (1 POINT) A function is declared with fn, its name, :=, the parameters and the result type: 1 fn check := (i32 x, bool flag) -> bool { i32 mut y{3} if flag { y := y + x } bool result{y == 10} exit result } bool a{check(7, true)} exit a Expected: Program exit with result true. A function may call itself: fn fib := (i32 n) -> i32 { if n == 0 { exit 0 } if n == 1 { exit 1 } i32 result{fib(n - 1) + fib(n - 2)} exit result } exit fib(10) Expected: Program exit with result 55. - A function name follows the same rules as a variable name. A function has any number of parameters. Parameter types and the result type are built-in types or structs. - Parameters are copies and cannot be changed in the body. The body sees only its parameters, its own variables and the functions of the program, not the top-level variables. - The body is a block, the same as in if, and its last line is exit. In a function, exit ends the function, and its value is the result; it must have the result type. At the top level, exit ends the program, as before. An exit inside an if in a function ends the function early. - Functions are declared only at the top level: no function and no struct inside a function body. - A function can call any function of the program, also itself or one declared below it. For this, first collect all the signatures, then check and generate the bodies. In the IR each function of the program becomes a function of the module. Its parameters are stored into slots in its own entry block. exit inside a function becomes ret, a call becomes call. Add a prefix to the function names in the IR, so that a function called main or printf does not clash with the functions of the runtime.
+Response: Концептуально — так (назва, аргументи, тіло), але синтаксично граматика має суворіші ключові слова й роздільники, визначені в завданні: fn, :=, дужки для параметрів, стрілку -> та тип повертаного значення.
+1. Точна граматика у форматі EBNF
+Згідно із специфікацією завдання:
+(* Оголошення функції *)
+fn_decl     ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block
+param_list  ::= param { "," param }
+param       ::= type ident   (* Зверніть увагу: без 'mut', оскільки параметри завжди константні *)
+
+(* Виклик функції (як вираз/операнд) *)
+fn_call     ::= ident "(" [ arg_list ] ")"
+arg_list    ::= expr { "," expr }
+
+
+2. Ключові деталі та пастки з умови завдання
+Коли будете реалізовувати це в коді, зверніть увагу на кілька важливих моментів з вимог:
+А. Двопрохідний аналіз (Two-pass approach)
+Оскільки функція може викликати іншу функцію, оголошену нижче за неї у файлі (або сама себе):
+Перший прохід: Спочатку збираєте тільки підписи всіх функцій (name, param_types, return_type).
+Другий прохід: Реалізуєте перевірку типів (SemanticChecker) та генерацію коду (CodeGenVisitor) для тіл функцій.
+Б. Область видимості (Scoping)
+Параметри — це константи: Їх не можна змінювати всередині функції (як змінні без mut).
+Немає доступу до глобальних змінних: Всередині функції видно тільки її власні параметри, її локальні змінні та інші функції/структури. Глобальні змінні top-level з функції невидно.
+В. Трансляція в LLVM IR
+Префікс імені: Додавайте префікс до імені кожної функції в LLVM IR (наприклад, f_fib або user_fib), щоб уникнути конфліктів із системними функціями на кшталт main чи printf.
+exit → ret: Усі exit <expr> всередині функції мають генерувати інструкцію ret з відповідним значенням, а не завершувати всю програму.
+call: Виклик функції перетворюється на інструкцію builder.call(fn_ptr, args).
+Слот для параметрів: При вході у функцію для кожного параметра створюється alloca в entry-блоці функції, і туди записується передане значення.
+
+User prompt: а як створюються функції у llvmlite?
+Response: У llvmlite створення функції складається з кількох стандартних кроків: визначення сигнатури (типу), створення самої функції в модулі, додавання базвого блоку entry та збереження аргументів у локльні слоти (alloca).
+Ось покроковий приклад із кодом під ваше завдання:
+1. Визначення типу та створення функції в модулі
+Спочатку ви створюєте FunctionType, а потім додаєте функцію в ir.Module.
+⚠️ Важливо: Не забудьте додавати префікс до імені функції (наприклад, f_), як вимагає умова завдання, щоб уникнути конфліктів із main або printf.
+from llvmlite import ir
+
+# 1. Типи параметрів та типу повернення
+# Наприклад, для: fn add(i32 x, i32 y) -> i32
+ret_type = ir.IntType(32)             # i32
+param_types = [ir.IntType(32), ir.IntType(32)]  # [i32, i32]
+
+# 2. Створення сигнатури функції (FunctionType)
+fn_type = ir.FunctionType(ret_type, param_types)
+
+# 3. Створення функції в модулі з префіксом імені
+fn_name = "f_" + "add"  # Префікс для уникнення конфліктів
+func = ir.Function(module, fn_type, name=fn_name)
+
 
+2. Створення блоку entry та ініціалізація IRBuilder
+Далі для функції потрібно створити початковий блок та встановити туди builder:
+# Створюємо базовий блок entry для функції
+entry_block = func.append_basic_block("entry")
 
-Результат: Decl y i64 mut. Це повністю відповідає специфікації.
-Підсумковий чек-лист для виправлення:
-Перевірка другого порівняння в parse_expr: Додати перевірку на наявність ще одного токена "comparison" після self.parse_arith() і викидати помилку, якщо користувач написав більше одного порівняння в одному виразі.
-Перевірити лексичні помилки поодиноких = та !: У lex() для EQUAL та NOTEQUAL ви повертаєте raise_err(13, ...) та raise_err(14, ...). Переконайтеся, що тексти помилок точно відповідають вимогам тестувальника (line X:Y: expected '==' (a single '=' is not an operator)).
-
-User prompt: напиши тести для цього завдання: Errors the pass reports • line 2:9: cannot apply '+' to bool — at the operator • line 2:10: cannot compare bool with i32 — at the operator • line 2:5: cannot initialise 'c' of type i32 with a value of type i64 — at the name • line 3:1: cannot assign to 'x' of type i32 with a value of type i64 — at the name • line 1:7: constant 3000000000 does not fit in i32 — at the constant • line 1:6: cannot initialise 'b' of type bool with a value of type i32 • and the three you already have: used before its declaration, already declared, not mut — with the messages and positions they had in Practice 3.
-Response: Ось набір тестових файлів відповідно до вимог Practice 4 (Task 2 & Task 3).
-Тести розділено на дві директорії: tests/err (для перевірки семантичних та лексичних помилок) та tests/ok (для перевірки коректної компіляції та виконання).
-1. Негативні тести: tests/err/
-Кожен файл містить конкретну семантичну або лексичну помилку та поруч вказаний файл .expected з очікуваним виводом у stderr.
-tests/err/01_bool_add.txt
-bool a{true}
-i32 b{a + 5}
-exit b
-
-
-tests/err/01_bool_add.expected
-compilation error: line 2:9: cannot apply '+' to bool
-
-
-tests/err/02_bool_int_compare.txt
-bool a{true}
-bool b{a == 5}
-exit 0
-
-
-tests/err/02_bool_int_compare.expected
-compilation error: line 2:10: cannot compare bool with i32
-
-
-tests/err/03_init_narrowing.txt
-i64 a{100}
-i32 c{a}
-exit 0
-
-
-tests/err/03_init_narrowing.expected
-compilation error: line 2:5: cannot initialise 'c' of type i32 with a value of type i64
-
-
-tests/err/04_assign_narrowing.txt
-i32 mut x{10}
-i64 y{20}
-x := y
-exit x
-
-
-tests/err/04_assign_narrowing.expected
-compilation error: line 3:1: cannot assign to 'x' of type i32 with a value of type i64
-
-
-tests/err/05_i32_overflow_const.txt
-i32 a{3000000000}
-exit a
-
-
-tests/err/05_i32_overflow_const.expected
-compilation error: line 1:7: constant 3000000000 does not fit in i32
-
-
-tests/err/06_bool_init_with_int.txt
-bool b{1}
-exit 0
-
-
-tests/err/06_bool_init_with_int.expected
-compilation error: line 1:6: cannot initialise 'b' of type bool with a value of type i32
-
-
-tests/err/07_undeclared.txt
-i32 a{x + 5}
-exit a
-
-
-tests/err/07_undeclared.expected
-compilation error: line 1:7: undeclared variable 'x'
-
-
-tests/err/08_redeclared.txt
-i32 a{10}
-i32 a{20}
-exit a
-
-
-tests/err/08_redeclared.expected
-compilation error: line 2:5: redeclared variable 'a'
-
-
-tests/err/09_assign_immutable.txt
-i32 x{10}
-x := 20
-exit x
-
-
-tests/err/09_assign_immutable.expected
-compilation error: line 2:1: cannot assign to immutable variable 'x'
-
-
-tests/err/10_single_equal_lex.txt
-i32 a = 1
-exit a
-
-
-tests/err/10_single_equal_lex.expected
-compilation error: line 1:7: expected '==' (a single '=' is not an operator)
-
-
-2. Позитивні тести: tests/ok/
-Ці програми повинні успішно проходити SemanticChecker, генерувати LLVM IR та повертати коректний результат виконання через lli.
-tests/ok/01_i64_widen.txt
-i32 x{15}
-i64 mut y{x}
-i64 z{x + 10}
-y := y * z + 10
-exit y
-
-
-tests/ok/01_i64_widen.expected
-Program exit with result 385
-
-
-tests/ok/02_bool_compare.txt
-i64 a{10}
-bool b{true}
-bool c{false}
-bool d{a == 10}
-bool mut e{a != 10}
-e := b == d
-exit e
-
-
-tests/ok/02_bool_compare.expected
-Program exit with result 1
-
-
-tests/ok/03_i64_large_const.txt
-i64 a{3000000000}
-i64 b{5000000000}
-i64 c{a + b}
-exit c
-
-
-tests/ok/03_i64_large_const.expected
-Program exit with result 8000000000
-
-
-tests/ok/04_bool_exit.txt
-bool flag{false}
-exit flag
-
-
-tests/ok/04_bool_exit.expected
-Program exit with result 0
-
-
-tests/ok/05_arith_widening_mix.txt
-i32 a{5}
-i64 b{10}
-i64 c{a * b + a}
-exit c
-
-
-tests/ok/05_arith_widening_mix.expected
-Program exit with result 55
-
-
-tests/ok/06_bool_eq_bool.txt
-bool a{true}
-bool b{false}
-bool c{a != b}
-exit c
-
-
-tests/ok/06_bool_eq_bool.expected
-Program exit with result 1
-
-
-Поради щодо запуску та перевірки
-При реалізації скрипта тестування (test_runner.py або bash runner), звертайте увагу на такі моменти:
-Для тестів із tests/err/:
-Компілятор повинен завершуватися з ненульовим кодом повернення (sys.exit(...)).
-Текст у stderr має точно (символ в символ, включаючи line:col) збігатися з вмістом відповідного .expected файлу.
-Вихідний .ll файл не повинен створюватися.
-Для тестів із tests/ok/:
-Код повернення компілятора має бути 0.
-Згенерований IR повинен виконуватися за допомогою lli output.ll.
-Результат у stdout повинен збігатися з вмістом відповідного .expected файлу.
+# Переключаємо/ініціалізуємо builder на цей блок
+builder = ir.IRBuilder(entry_block)
+
+
+3. Збереження аргументів у слоти (alloca)
+Згідно з умовою, параметри передаються як копії. У LLVM IR вхідні параметри доступні через список func.args. Для кожного з них потрібно виділити пам'ять у блоці entry за допомогою alloca та записати туди значення за допомогою store:
+# Словник локальних змінних для цієї функції
+func_symbols = {}
+
+for i, arg in enumerate(func.args):
+    # Призначимо ім'я аргументу для зручності відлагодження
+    param_name = node.params[i].name  # наприклад, "x" або "y"
+    arg.name = param_name
+
+    # Створюємо alloca-слот у блоці entry
+    ptr = builder.alloca(arg.type, name=param_name)
+    
+    # Записуємо значення переданого аргументу в слот
+    builder.store(arg, ptr)
+    
+    # Зберігаємо вказівник у таблицю символів функції
+    func_symbols[param_name] = ptr
+
+
+4. Повернення значення (exit → ret)
+Коли всередині функції виконується exit <expr>, у LLVM IR це транслюється в інструкцію builder.ret():
+# val — це скомпільоване значення виразу після exit
+val = exit_node.val.accept(self)
+
+# Генеруємо повернення з функції
+builder.ret(val)
+
+
+5. Виклик функції (builder.call)
+Коли ви викликаєте функцію всередині виразу (fn_call), ви використовуєте builder.call():
+# 1. Знаходимо об'єкт llvmlite.ir.Function за іменем (з префіксом)
+callee_func = self.module.globals.get("f_" + call_node.name)
+
+# 2. Обчислюємо всі аргументи виклику
+compiled_args = [arg.accept(self) for arg in call_node.args]
+
+# 3. Генеруємо інструкцію call
+result = builder.call(callee_func, compiled_args)
+
+
+Повний зв'язаний приклад для кодогенератора:
+def visit_fn_decl(self, node):
+    # 1. Формуємо тип функції
+    ret_llvm_type = TYPES[node.ret_type]
+    param_llvm_types = [TYPES[p.type_name] for p in node.params]
+    fn_type = ir.FunctionType(ret_llvm_type, param_llvm_types)
+
+    # 2. Створюємо функцію
+    func = ir.Function(self.module, fn_type, name="f_" + node.name)
+    
+    # 3. Базовий блок і builder
+    entry_bb = func.append_basic_block("entry")
+    prev_builder = self.builder
+    self.builder = ir.IRBuilder(entry_bb)
+    
+    # 4. Локальні символи функції
+    old_symbols = self.symbols
+    self.symbols = {}
+
+    for i, arg in enumerate(func.args):
+        p_node = node.params[i]
+        arg.name = p_node.name
+        ptr = self.builder.alloca(arg.type, name=p_node.name)
+        self.builder.store(arg, ptr)
+        self.symbols[p_node.name] = ptr
+
+    # 5. Генерація тіла функції
+    node.body_block.accept(self)
+
+    # 6. Відновлюємо попередній контекст builder/symbols
+    self.symbols = old_symbols
+    self.builder = prev_builder
+
+
+
+User prompt: яка команда використовується для ребейзу гільки на кінець іншої гілки
+Response: Основна команда:
+git rebase <назва_цільової_гілки>
+
+
+Якщо ви зараз перебуваєте на своїй гілці (наприклад, feature) і хочете перенести її коміти поверх останніх змін із гілки main:
+git checkout feature
+git rebase main
+
+
+Або виконати це однією командою з будь-якого місця:
+git rebase main feature
+
+
+(де main — гілка, на кінець якої ви стаєте, а feature — ваша поточна гілка)
+
+User prompt: чому в гіт хабі може таке писати?  Can’t automatically merge. Don’t worry, you can still create the pull request.
+Response: Це повідомлення означає, що між вашою гілкою та гілкою, куди ви робите Pull Request (наприклад, main), виникли конфлікти злиття (merge conflicts).
+Чому це відбувається?
+Git не може автоматично об'єднати код, тому що:
+В обох гілках змінювали одні й ті самі рядки у файлах після того, як ваші гілки розійтися.
+В одній гілці файл видалили, а в іншій — відредагували.
+Оскільки Git не знає, які саме зміни є правильними, він залишає це рішення за вами.
+Як це виправити?
+Ви можете створити Pull Request далі (як і радить GitHub), а потім вирішити конфлікти одним із двох способів:
+Спосіб 1: Через веб-інтерфейс GitHub (найпростіший)
+Натисніть Create pull request.
+У самому PR знизу з'явиться сіра кнопка Resolve conflicts.
+Натисніть її, відредагуйте конфліктні файли (видаліть маркери <<<<<<<, =======, >>>>>>>) та збережіть рішення кнопкою Mark as resolved → Commit merge.
+Спосіб 2: Локально через термінал (надійніший)
+Підтягніть зміни з цільової гілки у свою локальну гілку (через merge або rebase), розв'яжіть конфлікти в редакторі коду та залиште новий комміт:
+Варіант через merge:
+git checkout ваша_гілка
+git fetch origin
+git merge origin/main
+# (IDE покаже конфліктні файли — виправте їх)
+git add .
+git commit -m "Fix merge conflicts"
+git push origin ваша_гілка
+
+
+Варіант через rebase (якщо хочете чисту історію):
+git checkout ваша_гілка
+git fetch origin
+git rebase origin/main
+# (виправте конфлікти у файлах)
+git add .
+git rebase --continue
+git push --force-with-lease origin ваша_гілка
+
+
+Після того, как ви виправите конфлікти та відправите код на GitHub, кнопка Merge pull request стане зеленою та активною.
 
