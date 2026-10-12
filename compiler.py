@@ -1041,8 +1041,11 @@ class Parser:
 
 class SemanticChecker:
     def __init__(self):
-        self.scopes = [{}]  # stack of frames (dicts): name -> DeclNode
-        self.structs = {}  # name -> StructDefNode
+        self.symbols = {}   # name -> DeclNode (top-level scope OR current fn scope)
+        self.structs = {}   # name -> StructDefNode
+        self.functions = {} # name -> FnDeclNode (for signature lookup)
+        self.current_fn = None   # FnDeclNode being checked, or None (top-level)
+        self.fn_locals = {}      # name -> DeclNode (current function locals + params)
 
     def lookup(self, node, name):
         for frame in reversed(self.scopes):
@@ -1073,20 +1076,100 @@ class SemanticChecker:
             return
         if have == "i32" and want_type == "i64":
             return  # only widening allowed
-        # constant that is too large for the declared integer type
         if isinstance(expr, ConstNode) and want_type in ("i32", "i64"):
             self._sem_err(expr.line, expr.col,
                           f"constant {expr.val} does not fit in {want_type}")
         self._sem_err(at_node.line, at_node.col,
                       f"cannot {what} of type {want_type} with a value of type {have}")
 
+    def _validate_type(self, type_name, line, col):
+        """Ensure type_name is a known built-in or struct."""
+        if type_name not in ("i32", "i64", "bool") and type_name not in self.structs:
+            raise_err(11, line, col, ue_part=f"'{type_name}'")
 
+    # ── active symbol lookup ─────────────────────────────────────────
+    def _lookup(self, name):
+        """Return DeclNode for name; inside a function only fn_locals is visible."""
+        if self.current_fn is not None:
+            return self.fn_locals.get(name)
+        return self.symbols.get(name)
+
+    def _declare(self, name, decl_node):
+        """Register a new local variable (raises if already declared)."""
+        if self.current_fn is not None:
+            if name in self.fn_locals:
+                raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
+            self.fn_locals[name] = decl_node
+        else:
+            if name in self.symbols:
+                raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
+            self.symbols[name] = decl_node
+
+    # ── two-pass program visit ────────────────────────────────────────
     def visit_program(self, node):
-        self.scopes = [{}]
+        # Pass 1: collect struct defs and function signatures
         for stmt in node.stmts:
-            stmt.accept(self)
+            if isinstance(stmt, StructDefNode):
+                self.visit_struct_def(stmt)
+            elif isinstance(stmt, FnDeclNode):
+                self._register_fn_sig(stmt)
+
+        # Pass 2: check non-struct/non-fn top-level stmts and fn bodies
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                pass  # already done
+            elif isinstance(stmt, FnDeclNode):
+                self._check_fn_body(stmt)
+            else:
+                stmt.accept(self)
+
         if node.exit:
             node.exit.accept(self)
+
+    def _register_fn_sig(self, node):
+        """Register function name + signature without checking body."""
+        if node.name in self.functions or node.name in self.structs or node.name in ("i32", "i64", "bool"):
+            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
+        # Validate param and return types
+        for p in node.params:
+            self._validate_type(p.type_name, p.line, p.col)
+        self._validate_type(node.ret_type, node.line, node.col)
+        self.functions[node.name] = node
+
+    def _check_fn_body(self, node):
+        """Type-check the body of a function in its isolated scope."""
+        saved_symbols = self.symbols
+        saved_fn = self.current_fn
+        saved_locals = self.fn_locals
+
+        # Set up isolated scope: only params visible initially
+        self.current_fn = node
+        self.fn_locals = {}
+        for p in node.params:
+            # Create a pseudo-DeclNode for each parameter (immutable)
+            pdecl = DeclNode(p.line, p.col, p.type_name, p.name, False, None)
+            self.fn_locals[p.name] = pdecl
+
+        # Check body block
+        node.body.accept(self)
+
+        # Validate exit type matches ret_type
+        if node.body.exit_node is not None:
+            exit_val = node.body.exit_node.val
+            if exit_val.type not in ("i32", "i64", "bool") and exit_val.type not in self.structs:
+                self._sem_err(node.body.exit_node.line, node.body.exit_node.col,
+                              f"function '{node.name}' must return {node.ret_type}, got {exit_val.type}")
+            try:
+                self._check_assignable(exit_val, node.ret_type,
+                                       node.body.exit_node,
+                                       f"return from '{node.name}'")
+            except SystemExit:
+                raise
+
+        # Restore
+        self.current_fn = saved_fn
+        self.fn_locals = saved_locals
+        self.symbols = saved_symbols
 
     def visit_struct_def(self, node):
         if node.name in self.structs or node.name in ("i32", "i64", "bool"):
@@ -1098,12 +1181,12 @@ class SemanticChecker:
                 raise_err(11, f.line, f.col, ue_part=f"'{f.type_name}'")
         self.structs[node.name] = node
 
+    def visit_fn_decl(self, node):
+        # Should only be called via _check_fn_body; fn signatures already registered
+        pass
+
     def visit_decl(self, node):
-        top_frame = self.scopes[-1]
-        if node.name in top_frame:
-            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
-        if node.type_name not in ("i32", "i64", "bool") and node.type_name not in self.structs:
-            raise_err(11, node.line, node.col, ue_part=f"'{node.type_name}'")
+        self._validate_type(node.type_name, node.line, node.col)
 
         if node.type_name in ("i32", "i64", "bool"):
             if len(node.inits) > 1:
@@ -1137,10 +1220,12 @@ class SemanticChecker:
                                            f"initialise '{node.name}.{f.name}'")
                 node.is_copy = False
 
-        top_frame[node.name] = node
+        self._declare(node.name, node)
 
     def visit_assign(self, node):
-        decl = self.lookup(node, node.name)
+        decl = self._lookup(node.name)
+        if decl is None:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
         node.decl = decl
         if not decl.mutable:
             raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")
@@ -1159,6 +1244,48 @@ class SemanticChecker:
         if node.val.type in self.structs:
             self._sem_err(node.line, node.col,
                           f"cannot exit with a value of type {node.val.type}")
+
+    def visit_block(self, node):
+        """Visit statements inside a block (if/while body; fn body is handled by _check_fn_body)."""
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node:
+            node.exit_node.accept(self)
+            # Validate return type if we are inside a function
+            if self.current_fn is not None:
+                self._check_assignable(node.exit_node.val, self.current_fn.ret_type,
+                                       node.exit_node,
+                                       f"return from '{self.current_fn.name}'")
+
+    def visit_if(self, node):
+        cond_type = node.cond.accept(self)
+        if cond_type != "bool":
+            self._sem_err(node.line, node.col,
+                          f"if condition must be bool, got {cond_type}")
+        node.then_block.accept(self)
+        if node.else_block:
+            node.else_block.accept(self)
+
+    def visit_while(self, node):
+        cond_type = node.cond.accept(self)
+        if cond_type != "bool":
+            self._sem_err(node.line, node.col,
+                          f"while condition must be bool, got {cond_type}")
+        node.body.accept(self)
+
+    def visit_fn_call(self, node):
+        if node.name not in self.functions:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+        fn = self.functions[node.name]
+        if len(node.args) != len(fn.params):
+            self._sem_err(node.line, node.col,
+                          f"function '{node.name}' expects {len(fn.params)} argument(s), got {len(node.args)}")
+        for arg, param in zip(node.args, fn.params):
+            arg.accept(self)
+            self._check_assignable(arg, param.type_name, node,
+                                   f"pass argument to '{param.name}'")
+        node.type = fn.ret_type
+        return node.type
 
     def visit_if(self, node):
         cond_type = node.condition.accept(self)
@@ -1229,17 +1356,14 @@ class SemanticChecker:
         rt = node.right.accept(self)
 
         if node.op in ("+", "-", "*"):
-            # arithmetic: both must be integers
             if lt == "bool":
                 self._sem_err(node.line, node.col,
                               f"cannot apply '{node.op}' to bool")
             if rt == "bool":
                 self._sem_err(node.line, node.col,
                               f"cannot apply '{node.op}' to bool")
-            # result is the wider type
             node.type = "i64" if (lt == "i64" or rt == "i64") else "i32"
         else:  # == or !=
-            # both must be integers (any mix) or both bools
             both_bool = (lt == "bool" and rt == "bool")
             both_int  = (lt in ("i32", "i64") and rt in ("i32", "i64"))
             if not (both_bool or both_int):
@@ -1250,7 +1374,9 @@ class SemanticChecker:
         return node.type
 
     def visit_var(self, node):
-        decl = self.lookup(node, node.name)
+        decl = self._lookup(node.name)
+        if decl is None:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
         node.decl = decl
         node.type = decl.type_name
         return node.type
@@ -1281,14 +1407,81 @@ class CodeGenVisitor:
         # Symbol table: decl node -> alloca_ptr
         self.symbols = {}
         self.struct_defs = {}
+        # function IR objects: fn_name -> ir.Function
+        self.ir_functions = {}
+        self.current_fn = None         # ir.Function currently being generated
+        self.current_fn_node = None    # FnDeclNode currently being generated
+
+    def _active_builder(self):
+        return self.builder
 
     def visit_program(self, node):
+        # Pass 1: declare all struct types and IR function prototypes
         for stmt in node.stmts:
-            stmt.accept(self)
+            if isinstance(stmt, StructDefNode):
+                stmt.accept(self)
+            elif isinstance(stmt, FnDeclNode):
+                self._declare_fn_ir(stmt)
+
+        # Pass 2: generate function bodies, then top-level stmts
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                pass
+            elif isinstance(stmt, FnDeclNode):
+                self._gen_fn_body(stmt)
+            else:
+                stmt.accept(self)
+
         if node.exit:
             node.exit.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.unreachable()
+
+    def _declare_fn_ir(self, node):
+        """Create an ir.Function prototype for the function (no body yet)."""
+        param_types = [TYPES[p.type_name] for p in node.params]
+        ret_llvm = TYPES[node.ret_type]
+        fn_type = ir.FunctionType(ret_llvm, param_types)
+        ir_fn = ir.Function(module, fn_type, name=f"f_{node.name}")
+        self.ir_functions[node.name] = ir_fn
+
+    def _gen_fn_body(self, node):
+        """Generate LLVM IR for the function body."""
+        ir_fn = self.ir_functions[node.name]
+
+        # Save main context
+        saved_builder = self.builder
+        saved_symbols = self.symbols
+        saved_fn = self.current_fn
+        saved_fn_node = self.current_fn_node
+        saved_param_ptrs = getattr(self, '_param_ptrs', {})
+
+        # Create entry block and builder
+        entry_bb = ir_fn.append_basic_block("entry")
+        fn_builder = ir.IRBuilder(entry_bb)
+        self.builder = fn_builder
+        self.symbols = {}
+        self._param_ptrs = {}
+        self.current_fn = ir_fn
+        self.current_fn_node = node
+
+        # Allocate slots for parameters in the entry block
+        for i, p in enumerate(node.params):
+            llvm_type = TYPES[p.type_name]
+            ptr = fn_builder.alloca(llvm_type, name=p.name)
+            fn_builder.store(ir_fn.args[i], ptr)
+            self._param_ptrs[p.name] = ptr
+
+        # Generate body statements
+        node.body.accept(self)
+
+        # Restore
+        self.builder = saved_builder
+        self.symbols = saved_symbols
+        self.current_fn = saved_fn
+        self.current_fn_node = saved_fn_node
+        self._param_ptrs = saved_param_ptrs
+
 
     def coerce(self, value, have, want):
         if have == "i32" and want == "i64":
@@ -1312,6 +1505,9 @@ class CodeGenVisitor:
         ptr = self.builder.alloca(typ, name=name)
         self.builder.position_at_end(curr_bb)
         return ptr
+
+    def visit_fn_decl(self, node):
+        pass  # handled by visit_program two-pass
 
     def visit_decl(self, node):
         llvm_type = TYPES[node.type_name]
@@ -1343,17 +1539,23 @@ class CodeGenVisitor:
     def visit_exit(self, node):
         val = node.val.accept(self)
         have = node.val.type
-        if have == "bool":
-            true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            str_ptr = self.builder.select(val, true_ptr, false_ptr)
-            fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        if self.current_fn is not None:
+            # Inside a function: emit ret
+            val = self.coerce(val, have, self.current_fn_node.ret_type)
+            self.builder.ret(val)
         else:
-            val = self.coerce(val, have, "i64")
-            fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            self.builder.call(self.printf, [fmt_ptr, val])
-        self.builder.ret(ir.Constant(I32, 0))
+            # Top-level: print and ret 0
+            if have == "bool":
+                true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                str_ptr = self.builder.select(val, true_ptr, false_ptr)
+                fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_ptr, str_ptr])
+            else:
+                val = self.coerce(val, have, "i64")
+                fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_ptr, val])
+            self.builder.ret(ir.Constant(I32, 0))
 
     def visit_not(self, node):
         val = node.operand.accept(self)
@@ -1411,6 +1613,83 @@ class CodeGenVisitor:
         if node.exit:
             node.exit.accept(self)
 
+    def visit_block(self, node):
+        """Emit IR for statements and optional early-exit inside if/while blocks."""
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node:
+            node.exit_node.accept(self)
+
+    def visit_if(self, node):
+        cond_val = node.cond.accept(self)
+        then_bb = self.current_fn.append_basic_block("then") if self.current_fn else ir.Function
+        # We need the containing function; inside main that's the main function.
+        fn_ir = self.current_fn if self.current_fn else self.builder.function
+        then_bb = fn_ir.append_basic_block("then")
+        merge_bb = fn_ir.append_basic_block("merge")
+
+        if node.else_block:
+            else_bb = fn_ir.append_basic_block("else")
+            self.builder.cbranch(cond_val, then_bb, else_bb)
+        else:
+            self.builder.cbranch(cond_val, then_bb, merge_bb)
+
+        # Then block
+        self.builder.position_at_end(then_bb)
+        node.then_block.accept(self)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(merge_bb)
+
+        # Else block
+        if node.else_block:
+            self.builder.position_at_end(else_bb)
+            node.else_block.accept(self)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(merge_bb)
+
+        # Continue after if
+        self.builder.position_at_end(merge_bb)
+
+    def visit_while(self, node):
+        fn_ir = self.current_fn if self.current_fn else self.builder.function
+        cond_bb = fn_ir.append_basic_block("while_cond")
+        body_bb = fn_ir.append_basic_block("while_body")
+        end_bb  = fn_ir.append_basic_block("while_end")
+
+        self.builder.branch(cond_bb)
+        self.builder.position_at_end(cond_bb)
+        cond_val = node.cond.accept(self)
+        self.builder.cbranch(cond_val, body_bb, end_bb)
+
+        self.builder.position_at_end(body_bb)
+        node.body.accept(self)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(cond_bb)
+
+        self.builder.position_at_end(end_bb)
+
+    def visit_fn_call(self, node):
+        ir_fn = self.ir_functions[node.name]
+        fn_node = None
+        # Find FnDeclNode to get param types for coercion
+        # We stored them in checker.functions; access via node.type set by checker
+        arg_vals = []
+        for arg in node.args:
+            v = arg.accept(self)
+            arg_vals.append((v, arg.type))
+
+        # Coerce args to param types
+        fn_decl_node = None
+        for stmt in ast.stmts:
+            if isinstance(stmt, FnDeclNode) and stmt.name == node.name:
+                fn_decl_node = stmt
+                break
+        coerced = []
+        for (v, have), param in zip(arg_vals, fn_decl_node.params):
+            coerced.append(self.coerce(v, have, param.type_name))
+
+        return self.builder.call(ir_fn, coerced)
+
     def visit_binop(self, node):
         left_val = node.left.accept(self)
         right_val = node.right.accept(self)
@@ -1440,6 +1719,9 @@ class CodeGenVisitor:
             return self.builder.mul(left_val, right_val)
 
     def visit_var(self, node):
+        # First check if it's a function parameter slot
+        if self.current_fn is not None and hasattr(self, '_param_ptrs') and node.name in self._param_ptrs:
+            return self.builder.load(self._param_ptrs[node.name], name=node.name)
         ptr = self.symbols[node.decl]
         return self.builder.load(ptr, name=node.name)
 
