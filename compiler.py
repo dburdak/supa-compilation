@@ -735,7 +735,11 @@ class Parser:
 
     def parse_exit(self):
         exit_tok = self.eat()  # "exit"
-        val = self.parse_expr(is_exit=True)
+        # If nothing follows on the same line, raise "unparsable exit statement"
+        tok = self.peek()
+        if tok is None:
+            raise_err(7, exit_tok.line, exit_tok.col + len(exit_tok.text))
+        val = self.parse_expr()
         return ExitNode(exit_tok.line, exit_tok.col, val)
 
     def parse_fn_decl(self):
@@ -762,7 +766,7 @@ class Parser:
             leftover = self.peek()
             raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after function signature")
 
-        body = self.parse_block(inside_fn=True)
+        body = self.parse_block(inside_fn=True, requires_exit=True)
         return FnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
 
     def parse_param_list(self, param_names):
@@ -784,8 +788,11 @@ class Parser:
                 break
         return params
 
-    def parse_block(self, inside_fn=False):
-        """Parse: '{' NL { statement } [ exit NL ] '}' NL"""
+    def parse_block(self, inside_fn=False, requires_exit=False):
+        """Parse: '{' NL { statement } [ exit NL ] '}' NL
+        requires_exit=True means the block MUST end with exit (fn body).
+        inside_fn means we're inside a fn body (affects nested decls).
+        """
         nxt = self.peek_line()
         if nxt is None:
             raise_syntax_err(0, 0, "expected '{', found end of file")
@@ -841,7 +848,7 @@ class Parser:
                     leftover = self.peek()
                     raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
 
-        if inside_fn and not has_exit:
+        if requires_exit and not has_exit:
             raise_err(5, lbrace_tok.line, lbrace_tok.col)
 
         return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node)
@@ -852,7 +859,7 @@ class Parser:
         if self.peek() is not None:
             leftover = self.peek()
             raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after if condition")
-        then_block = self.parse_block(inside_fn=inside_fn)
+        then_block = self.parse_block(inside_fn=inside_fn, requires_exit=False)
 
         # check for else
         nxt = self.peek_line()
@@ -873,7 +880,7 @@ class Parser:
         if self.peek() is not None:
             leftover = self.peek()
             raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after while condition")
-        body = self.parse_block(inside_fn=inside_fn)
+        body = self.parse_block(inside_fn=inside_fn, requires_exit=False)
         return WhileNode(while_tok.line, while_tok.col, cond, body)
 
     def parse_arith(self):
@@ -1622,8 +1629,6 @@ class CodeGenVisitor:
 
     def visit_if(self, node):
         cond_val = node.cond.accept(self)
-        then_bb = self.current_fn.append_basic_block("then") if self.current_fn else ir.Function
-        # We need the containing function; inside main that's the main function.
         fn_ir = self.current_fn if self.current_fn else self.builder.function
         then_bb = fn_ir.append_basic_block("then")
         merge_bb = fn_ir.append_basic_block("merge")
@@ -1649,6 +1654,7 @@ class CodeGenVisitor:
 
         # Continue after if
         self.builder.position_at_end(merge_bb)
+
 
     def visit_while(self, node):
         fn_ir = self.current_fn if self.current_fn else self.builder.function
