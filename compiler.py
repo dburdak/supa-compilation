@@ -56,9 +56,11 @@ KEYWORDS = {
     "mut": "specifier",
     "exit": "statement",
     "struct": "keyword",
+    "fn": "keyword",
     "if": "keyword",
     "else": "keyword",
-    "while": "keyword"
+    "while": "keyword",
+
 }
 
 def raise_err(error_number, err_line, column, ue_part=""):
@@ -112,7 +114,7 @@ def is_digit(b):
     return False
 
 def is_operator(b):
-    if ord("*") == b or ord("+") == b or ord("-") == b:
+    if ord("*") == b or ord("+") == b:
         return True
     return False
 
@@ -143,8 +145,15 @@ def lex(data: bytes):
             elif b == ord("}"):
                 tokens.append(Token("rbrace", "}", line, col))
                 open_brace_col = None
+            elif b == ord("("):
+                tokens.append(Token("lparen", "(", line, col))
+            elif b == ord(")"):
+                tokens.append(Token("rparen", ")", line, col))
             elif b == ord(","):
                 tokens.append(Token("comma", ",", line, col))
+            elif b == ord("-"):
+                state = "MINUS"
+                start_col = col
             elif b == ord(":"):
                 state = "ASSIGN"
                 start_col = col
@@ -202,6 +211,15 @@ def lex(data: bytes):
             else:
                 # bare '!' — re-read the current byte in START
                 tokens.append(Token("operator", "!", line, start_col))
+                state = "START"
+                continue
+
+        elif state == "MINUS":
+            if b == ord(">"):
+                tokens.append(Token("arrow", "->", line, start_col))
+                state = "START"
+            else:
+                tokens.append(Token("operator", "-", line, start_col))
                 state = "START"
                 continue
 
