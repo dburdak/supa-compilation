@@ -1,0 +1,13 @@
+struct Point
+{
+i32 mut x
+i32 mut y
+}
+struct Circle
+{
+Point center
+i32 radius
+}
+Circle c{{15, 25}, 10}
+i32 res{c.center.x + c.center.y + c.radius}
+exit res

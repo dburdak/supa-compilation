@@ -1,0 +1,6 @@
+fn get_top := () -> i32
+{
+exit top
+}
+i32 top{100}
+exit get_top()

@@ -1,25 +1,51 @@
-program ::= { statement } finish
+program ::= { struct_def } { fn_decl } { statement } finish
 
-type ::= "i32" | "i64" | "bool"
+primitive_type ::= "i32" | "i64" | "bool"
 
-declaration ::= type [ "mut" ] ident "{" expr "}"
+struct_type ::= ident
 
-assignment ::= ident ":=" expr
+type ::= primitive_type | struct_type
 
-finish ::= "exit" operand
+struct_def ::= "struct" ident NL "{" NL { field_decl } "}" NL
 
-statement ::= declaration | assignment | if | while
+field_decl ::= type [ "mut" ] ident NL
 
-while ::= "while" expr NL block
+fn_decl ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block
+
+param_list ::= param { "," param }
+
+param ::= type ident
+
+fn_call ::= ident "(" [ arg_list ] ")"
+
+arg_list ::= expr { "," expr }
+
+declaration ::= type [ "mut" ] ident "{" init_expr { "," init_expr } "}"
+
+init_expr ::= expr | "{" init_expr { "," init_expr } "}"
+
+field ::= ident "." ident { "." ident }
+
+target ::= ident [ "." ident { "." ident } ]
+
+assignment ::= target ":=" expr
 
 if ::= "if" expr NL block [ "else" NL block ]
 
-block ::= "{" NL { statement } [ exit NL ] "}" NL
+while ::= "while" expr NL block
 
-operand ::= ident | number | "true" | "false"
+block ::= "{" NL { statement } [ finish NL ] "}" NL
+
+finish ::= "exit" factor
+
+statement ::= declaration | assignment | if | while
+
+operand ::= fn_call | ident | number | "true" | "false" | "!" operand
+
+factor ::= operand | field
 
 expr ::= arith [ ("==" | "!=") arith ]
 
 arith ::= term { ("+" | "-") term }
 
-term ::= operand { "*" operand }
+term ::= factor { "*" factor }

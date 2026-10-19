@@ -1,0 +1,6 @@
+i32 a{10}
+fn foo := () -> i32
+{
+exit 42
+}
+exit a

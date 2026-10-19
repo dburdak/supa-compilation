@@ -1,0 +1,16 @@
+struct Point
+{
+i32 mut x
+i32 mut y
+}
+fn add_to_point := (Point pt, i32 delta) -> Point
+{
+Point mut res{pt}
+res.x := res.x + delta
+res.y := res.y + delta
+exit res
+}
+Point p{10, 20}
+Point moved{add_to_point(p, 5)}
+i32 res{moved.x + moved.y}
+exit res

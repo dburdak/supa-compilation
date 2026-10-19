@@ -1,0 +1,6 @@
+fn bump := (i32 x) -> i32
+{
+x := x + 1
+exit x
+}
+exit bump(5)
