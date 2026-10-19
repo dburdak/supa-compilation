@@ -1,0 +1,1 @@
+compilation error: line 8:1: cannot assign to 'p1': struct 'Point' has immutable fields

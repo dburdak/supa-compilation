@@ -151,6 +151,8 @@ def lex(data: bytes):
                 tokens.append(Token("rparen", ")", line, col))
             elif b == ord(","):
                 tokens.append(Token("comma", ",", line, col))
+            elif b == ord("."):
+                tokens.append(Token("dot", ".", line, col))
             elif b == ord("-"):
                 state = "MINUS"
                 start_col = col
@@ -303,16 +305,50 @@ class DeclNode(StmtNode):
         return visitor.visit_decl(self)
 
 
-class AssignNode(StmtNode):
-    def __init__(self, line, col, name, value):
-        self.line, self.col, self.name, self.value = line, col, name, value
+class StructInitNode(ExprNode):
+    def __init__(self, line, col, inits):
+        self.line, self.col = line, col
+        self.inits = inits
 
     def dump(self, indent=0):
-        print(" " * indent + f"Assign {self.name}")
+        print(" " * indent + "StructInit")
+        for e in self.inits:
+            e.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_struct_init(self)
+
+
+class FieldAccessNode(ExprNode):
+    def __init__(self, line, col, obj, field_name):
+        self.line, self.col = line, col
+        self.obj = obj
+        self.field_name = field_name
+        self.field_index = None
+
+    def dump(self, indent=0):
+        print(" " * indent + f"FieldAccess {self.field_name}")
+        self.obj.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_field_access(self)
+
+
+class AssignNode(StmtNode):
+    def __init__(self, line, col, name, value, field_chain=None):
+        self.line, self.col = line, col
+        self.name = name
+        self.value = value
+        self.field_chain = field_chain if field_chain is not None else []
+        self.full_name = name + ("." + ".".join(self.field_chain) if self.field_chain else "")
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Assign {self.full_name}")
         self.value.dump(indent + 2)
 
     def accept(self, visitor):
         return visitor.visit_assign(self)
+
 
 
 class BinOpNode(ExprNode):
@@ -533,9 +569,22 @@ class Parser:
     # ── top-level ──────────────────────────────────────────────────────
     def parse_program(self):
         stmts = []
+        current_phase = "struct"
         while self.peek_line() is not None and not (
             self.peek_line()[0].kind == "statement" and self.peek_line()[0].text == "exit"
         ):
+            line_toks = self.peek_line()
+            first_tok = line_toks[0] if line_toks else None
+            if first_tok and first_tok.kind == "keyword" and first_tok.text == "struct":
+                if current_phase != "struct":
+                    raise_syntax_err(first_tok.line, first_tok.col, "struct definitions must come before functions and statements")
+            elif first_tok and first_tok.kind == "keyword" and first_tok.text == "fn":
+                if current_phase == "stmt":
+                    raise_syntax_err(first_tok.line, first_tok.col, "function declarations must come before statements")
+                current_phase = "fn"
+            else:
+                current_phase = "stmt"
+
             self.next_line()
             stmt_node = self.parse_statement()
             stmts.append(stmt_node)
@@ -649,6 +698,17 @@ class Parser:
 
         return StructDefNode(struct_tok.line, struct_tok.col, name_tok.text, fields)
 
+    def parse_init_expr(self):
+        if self.peek() is not None and self.peek().kind == "lbrace":
+            lb = self.eat()
+            nested = [self.parse_init_expr()]
+            while self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+                nested.append(self.parse_init_expr())
+            self.expect("rbrace", "'}'")
+            return StructInitNode(lb.line, lb.col, nested)
+        return self.parse_expr()
+
     def parse_decl(self):
         type_tok = self.eat()  # "i32" | "i64" | "bool" | struct name ident
         type_name = type_tok.text
@@ -662,10 +722,10 @@ class Parser:
         name_tok = self.expect("ident", "variable name")
         self.expect("lbrace", "'{'")
 
-        inits = [self.parse_expr()]
+        inits = [self.parse_init_expr()]
         while (tok := self.peek()) is not None and tok.kind == "comma":
             self.eat()
-            inits.append(self.parse_expr())
+            inits.append(self.parse_init_expr())
 
         self.expect("rbrace", "'}'")
 
@@ -674,9 +734,14 @@ class Parser:
 
     def parse_assignment(self):
         var_tok = self.eat()  # ident
+        field_chain = []
+        while self.peek() is not None and self.peek().kind == "dot":
+            self.eat()
+            f_tok = self.expect("ident", "field name")
+            field_chain.append(f_tok.text)
         self.expect("assignment", "':='")
         value = self.parse_expr()
-        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value, field_chain=field_chain)
 
     def parse_exit(self):
         exit_tok = self.eat()  # "exit"
@@ -870,9 +935,15 @@ class Parser:
         elif tok.kind == "ident":
             # peek ahead: if next token is '(', it's a function call
             if self.pos + 1 < len(self.toks) and self.toks[self.pos + 1].kind == "lparen":
-                return self.parse_fn_call()
-            self.eat()
-            return VarNode(tok.line, tok.col, tok.text)
+                node = self.parse_fn_call()
+            else:
+                self.eat()
+                node = VarNode(tok.line, tok.col, tok.text)
+            while self.peek() is not None and self.peek().kind == "dot":
+                dot_tok = self.eat()
+                f_tok = self.expect("ident", "field name")
+                node = FieldAccessNode(dot_tok.line, dot_tok.col, node, f_tok.text)
+            return node
         elif tok.kind == "constant":
             self.eat()
             return ConstNode(tok.line, tok.col, tok.text)
@@ -1033,6 +1104,20 @@ class SemanticChecker:
         # Should only be called via _check_fn_body; fn signatures already registered
         pass
 
+    def _check_struct_inits(self, sdef, inits, node, prefix):
+        for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
+            if isinstance(expr, StructInitNode):
+                if f.type_name not in self.structs:
+                    self._sem_err(expr.line, expr.col, f"field '{prefix}.{f.name}' of type {f.type_name} cannot be initialised with {{...}}")
+                sub_sdef = self.structs[f.type_name]
+                if len(expr.inits) != len(sub_sdef.fields):
+                    self._sem_err(expr.line, expr.col, f"cannot initialise '{prefix}.{f.name}' of type {f.type_name}: expected {len(sub_sdef.fields)} values, got {len(expr.inits)}")
+                self._check_struct_inits(sub_sdef, expr.inits, node, f"{prefix}.{f.name}")
+                expr.type = f.type_name
+            else:
+                expr.accept(self)
+                self._check_assignable(expr, f.type_name, node, f"initialise '{prefix}.{f.name}'")
+
     def visit_decl(self, node):
         self._validate_type(node.type_name, node.line, node.col)
 
@@ -1046,7 +1131,7 @@ class SemanticChecker:
             node.is_copy = False
         else:
             sdef = self.structs[node.type_name]
-            if len(node.inits) == 1:
+            if len(node.inits) == 1 and not isinstance(node.inits[0], StructInitNode):
                 init_expr = node.inits[0]
                 init_type = init_expr.accept(self)
                 if init_type == node.type_name:
@@ -1062,10 +1147,7 @@ class SemanticChecker:
                 if len(node.inits) != len(sdef.fields):
                     self._sem_err(node.line, node.col,
                                   f"cannot initialise '{node.name}' of type {node.type_name}: expected {len(sdef.fields)} values, got {len(node.inits)}")
-                for idx, (f, expr) in enumerate(zip(sdef.fields, node.inits)):
-                    expr.accept(self)
-                    self._check_assignable(expr, f.type_name, node,
-                                           f"initialise '{node.name}.{f.name}'")
+                self._check_struct_inits(sdef, node.inits, node, node.name)
                 node.is_copy = False
 
         self._declare(node.name, node)
@@ -1077,15 +1159,60 @@ class SemanticChecker:
         node.decl = decl
         if not decl.mutable:
             raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")
-        node.value.accept(self)
 
-        if decl.type_name in self.structs:
-            if not self._all_fields_mut(decl.type_name):
-                self._sem_err(node.line, node.col,
-                              f"cannot assign to '{node.name}': struct '{decl.type_name}' has immutable fields")
+        if node.field_chain:
+            curr_type = decl.type_name
+            node.field_indices = []
+            for fname in node.field_chain:
+                if curr_type not in self.structs:
+                    self._sem_err(node.line, node.col, f"type '{curr_type}' is not a struct")
+                sdef = self.structs[curr_type]
+                target_f = None
+                target_idx = None
+                for idx, f in enumerate(sdef.fields):
+                    if f.name == fname:
+                        target_f = f
+                        target_idx = idx
+                        break
+                if target_f is None:
+                    self._sem_err(node.line, node.col, f"struct '{curr_type}' has no field '{fname}'")
+                if not target_f.mutable:
+                    self._sem_err(node.line, node.col, f"cannot assign to immutable field '{fname}'")
+                node.field_indices.append(target_idx)
+                curr_type = target_f.type_name
 
-        self._check_assignable(node.value, decl.type_name, node,
-                               f"assign to '{node.name}'")
+            node.target_type = curr_type
+            node.value.accept(self)
+            if curr_type in self.structs:
+                if not self._all_fields_mut(curr_type):
+                    self._sem_err(node.line, node.col,
+                                  f"cannot assign to '{node.full_name}': struct '{curr_type}' has immutable fields")
+            self._check_assignable(node.value, curr_type, node, f"assign to '{node.full_name}'")
+        else:
+            node.value.accept(self)
+            if decl.type_name in self.structs:
+                if not self._all_fields_mut(decl.type_name):
+                    self._sem_err(node.line, node.col,
+                                  f"cannot assign to '{node.name}': struct '{decl.type_name}' has immutable fields")
+            self._check_assignable(node.value, decl.type_name, node, f"assign to '{node.name}'")
+
+    def visit_field_access(self, node):
+        obj_type = node.obj.accept(self)
+        if obj_type not in self.structs:
+            self._sem_err(node.line, node.col, f"type '{obj_type}' is not a struct")
+        sdef = self.structs[obj_type]
+        target_f = None
+        target_idx = None
+        for idx, f in enumerate(sdef.fields):
+            if f.name == node.field_name:
+                target_f = f
+                target_idx = idx
+                break
+        if target_f is None:
+            self._sem_err(node.line, node.col, f"struct '{obj_type}' has no field '{node.field_name}'")
+        node.field_index = target_idx
+        node.type = target_f.type_name
+        return node.type
 
     def visit_exit(self, node):
         node.val.accept(self)
@@ -1202,6 +1329,7 @@ class CodeGenVisitor:
         # Symbol table: decl node -> alloca_ptr
         self.symbols = {}
         self.struct_defs = {}
+        self.fn_nodes = {}
         # function IR objects: fn_name -> ir.Function
         self.ir_functions = {}
         self.current_fn = None         # ir.Function currently being generated
@@ -1216,6 +1344,7 @@ class CodeGenVisitor:
             if isinstance(stmt, StructDefNode):
                 stmt.accept(self)
             elif isinstance(stmt, FnDeclNode):
+                self.fn_nodes[stmt.name] = stmt
                 self._declare_fn_ir(stmt)
 
         # Pass 2: generate function bodies, then top-level stmts
@@ -1304,6 +1433,17 @@ class CodeGenVisitor:
     def visit_fn_decl(self, node):
         pass  # handled by visit_program two-pass
 
+    def _store_struct_fields(self, ptr, sdef, inits, name_prefix):
+        for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
+            field_ptr = self.builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=f"{name_prefix}.{f.name}")
+            if isinstance(expr, StructInitNode):
+                sub_sdef = self.struct_defs[f.type_name]
+                self._store_struct_fields(field_ptr, sub_sdef, expr.inits, f"{name_prefix}.{f.name}")
+            else:
+                val = expr.accept(self)
+                val = self.coerce(val, expr.type, f.type_name)
+                self.builder.store(val, field_ptr)
+
     def visit_decl(self, node):
         llvm_type = TYPES[node.type_name]
         ptr = self.alloca_in_entry(llvm_type, node.name)
@@ -1319,17 +1459,41 @@ class CodeGenVisitor:
                 self.builder.store(val, ptr)
             else:
                 sdef = self.struct_defs[node.type_name]
-                for idx, (f, expr) in enumerate(zip(sdef.fields, node.inits)):
-                    val = expr.accept(self)
-                    val = self.coerce(val, expr.type, f.type_name)
-                    field_ptr = self.builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=f"{node.name}.{f.name}")
-                    self.builder.store(val, field_ptr)
+                self._store_struct_fields(ptr, sdef, node.inits, node.name)
+
+    def get_lvalue_ptr(self, expr):
+        if isinstance(expr, VarNode):
+            if expr.decl in self.symbols:
+                return self.symbols[expr.decl]
+            if self.current_fn is not None and hasattr(self, '_param_ptrs') and expr.name in self._param_ptrs:
+                return self._param_ptrs[expr.name]
+            return self.symbols[expr.decl]
+        elif isinstance(expr, FieldAccessNode):
+            obj_ptr = self.get_lvalue_ptr(expr.obj)
+            return self.builder.gep(obj_ptr, [ir.Constant(I32, 0), ir.Constant(I32, expr.field_index)], name=f"{expr.field_name}_ptr")
+        else:
+            val = expr.accept(self)
+            tmp = self.alloca_in_entry(TYPES[expr.type], "tmp_struct")
+            self.builder.store(val, tmp)
+            return tmp
+
+    def visit_field_access(self, node):
+        field_ptr = self.get_lvalue_ptr(node)
+        return self.builder.load(field_ptr, name=node.field_name)
 
     def visit_assign(self, node):
-        ptr = self.symbols[node.decl]
-        val = node.value.accept(self)
-        val = self.coerce(val, node.value.type, node.decl.type_name)
-        self.builder.store(val, ptr)
+        ptr = self.symbols[node.decl] if node.decl in self.symbols else self._param_ptrs[node.name]
+        if node.field_chain:
+            curr_ptr = ptr
+            for idx, fname in zip(node.field_indices, node.field_chain):
+                curr_ptr = self.builder.gep(curr_ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=fname)
+            val = node.value.accept(self)
+            val = self.coerce(val, node.value.type, node.target_type)
+            self.builder.store(val, curr_ptr)
+        else:
+            val = node.value.accept(self)
+            val = self.coerce(val, node.value.type, node.decl.type_name)
+            self.builder.store(val, ptr)
 
     def visit_exit(self, node):
         val = node.val.accept(self)
@@ -1422,11 +1586,7 @@ class CodeGenVisitor:
             arg_vals.append((v, arg.type))
 
         # Coerce args to param types
-        fn_decl_node = None
-        for stmt in ast.stmts:
-            if isinstance(stmt, FnDeclNode) and stmt.name == node.name:
-                fn_decl_node = stmt
-                break
+        fn_decl_node = self.fn_nodes[node.name]
         coerced = []
         for (v, have), param in zip(arg_vals, fn_decl_node.params):
             coerced.append(self.coerce(v, have, param.type_name))

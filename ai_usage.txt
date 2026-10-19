@@ -292,3 +292,28 @@ Program exit with result 1
 Згенерований IR повинен виконуватися за допомогою lli output.ll.
 Результат у stdout повинен збігатися з вмістом відповідного .expected файлу.
 
+================================================================================
+Practice 6: Structs and Functions (Tasks 1, 2, 3)
+Tool: Antigravity IDE / Gemini & Claude
+Tasks:
+- Task 1: Struct declaration and initialisation, mut fields, nested structs, object copying, full-struct assignment rules, IR generation via identified types and GEP.
+- Task 2: Function declaration, isolated scopes (body sees only parameters, local variables, and program functions), copying parameters, return via exit (supporting early returns and recursion), f_ prefix in IR.
+- Task 3: Fixed program structure (struct -> fn -> statements -> exit), chained field access with dot syntax (in expressions and assignments), mutability check across the chain, complete test suites in tests/ok and tests/err.
+
+Prompts and Interaction Summary:
+1. Verified syntax and semantics for structs and functions according to the Practice 6 specification.
+2. Implemented dot operator in lexer, FieldAccessNode, StructInitNode, and field chain support in AssignNode.
+3. Updated SemanticChecker:
+   - Pass 1: collecting struct defs and function signatures.
+   - Pass 2: checking function bodies in isolated scopes (parameters immutable), checking chained field access and validating that every step in an assignment chain is mutable.
+   - Recursive mutability check (_all_fields_mut) for whole-struct assignments.
+   - Enforced fixed program order (struct -> fn -> top-level statements -> exit).
+4. Updated CodeGenVisitor:
+   - Identified struct types in LLVM IR module context.
+   - GEP-based access for fields.
+   - Proper coercion and memory allocation in entry blocks.
+   - Function IR generation with f_ prefix and parameter slot allocas.
+5. Added tests:
+   - tests/ok: struct_basic, struct_nested, struct_field_assign, struct_copy, struct_fn_param_return, struct_nested_init_literal.
+   - tests/err: struct_immutable_field, struct_after_fn, fn_after_stmt, fn_top_level_var, fn_assign_param, struct_assign_immutable_fields.
+

@@ -1,0 +1,9 @@
+fn foo := () -> i32
+{
+exit 42
+}
+struct Point
+{
+i32 x
+}
+exit foo()
