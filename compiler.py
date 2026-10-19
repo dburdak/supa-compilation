@@ -713,6 +713,8 @@ class Parser:
                     return self.parse_decl()
                 if next_tok.kind == "ident":
                     return self.parse_decl()
+                if next_tok.kind == "lparen":
+                    return self.parse_fn_call()  # bare fn-call statement (result discarded)
             return self.parse_assignment()
         else:
             raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'")
