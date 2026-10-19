@@ -1,0 +1,15 @@
+fn double := (i32 x) -> i32
+{
+exit x * 2
+}
+struct Doubler
+{
+i32 mut val
+fn double := () -> i32
+{
+exit val * 2
+}
+}
+Doubler d{5}
+i32 r{d.double()}
+exit r
