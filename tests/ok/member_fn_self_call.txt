@@ -1,0 +1,17 @@
+struct Counter
+{
+i32 mut n
+fn inc := () -> i32
+{
+n := n + 1
+exit n
+}
+fn inc2 := () -> i32
+{
+inc()
+exit inc()
+}
+}
+Counter mut c{0}
+i32 r{c.inc2()}
+exit r
