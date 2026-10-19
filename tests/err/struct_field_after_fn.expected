@@ -1,1 +1,1 @@
-compilation error: line 9:1: field declaration after member function
+compilation error: line 8:1: expected 'fn' or '}', got 'i32' (field declaration after member function)

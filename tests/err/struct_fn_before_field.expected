@@ -1,1 +1,1 @@
-compilation error: line 3:1: member function before first field
+compilation error: line 2:1: struct must have at least one field (member function before first field)

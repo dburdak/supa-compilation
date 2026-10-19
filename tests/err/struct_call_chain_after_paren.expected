@@ -1,1 +1,1 @@
-compilation error: line 16:19: unexpected '.' after statement
+compilation error: line 17:20: expected '}', got '.'

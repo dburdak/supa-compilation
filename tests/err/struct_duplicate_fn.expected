@@ -1,1 +1,1 @@
-compilation error: line 9:4: redeclared variable 'f'
+compilation error: line 8:4: redeclared variable 'f'
