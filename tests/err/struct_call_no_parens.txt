@@ -1,0 +1,12 @@
+struct Point
+{
+i32 x
+i32 y
+fn d2 := () -> i32
+{
+exit x * x + y * y
+}
+}
+Point p{3, 4}
+i32 a{p.d2}
+exit a
