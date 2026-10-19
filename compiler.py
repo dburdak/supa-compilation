@@ -266,18 +266,58 @@ class FieldDef:
         self.name = name
 
 
+class MemberFnDeclNode(StmtNode):
+    def __init__(self, line, col, name, params, ret_type, body):
+        self.line, self.col = line, col
+        self.name = name          # str
+        self.params = params      # list[Param]
+        self.ret_type = ret_type  # str
+        self.body = body          # BlockNode
+
+    def dump(self, indent=0):
+        print(" " * indent + f"MemberFn {self.name} -> {self.ret_type}")
+        for p in self.params:
+            print(" " * (indent + 2) + f"Param {p.name} {p.type_name}")
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_decl(self)
+
+
+class MemberCallNode(ExprNode):
+    def __init__(self, line, col, target_node, member_name, args):
+        self.line, self.col = line, col
+        self.target_node = target_node  # VarNode or FieldAccessNode
+        self.member_name = member_name  # str
+        self.args = args                # list[ExprNode]
+
+    def dump(self, indent=0):
+        print(" " * indent + f"MemberCall {self.member_name}")
+        self.target_node.dump(indent + 2)
+        for a in self.args:
+            a.dump(indent + 2)
+
+    def accept(self, visitor):
+        if hasattr(visitor, "visit_member_call"):
+            return visitor.visit_member_call(self)
+        return None
+
+
 class StructDefNode(StmtNode):
-    def __init__(self, line: int, col: int, name: str, fields: list):
+    def __init__(self, line: int, col: int, name: str, fields: list, methods: list = None):
         self.line = line
         self.col = col
         self.name = name
         self.fields = fields
+        self.methods = methods if methods is not None else []
 
     def dump(self, indent=0):
         print(" " * indent + f"Struct {self.name}")
         for f in self.fields:
             kind = "mut" if f.mutable else "const"
-            print(" " * (indent + 2) + f"Field {f.name} {f.type_name} {kind}")
+            print(" " * (indent + 2) + f"Member {f.name} {f.type_name} {kind}")
+        for m in self.methods:
+            m.dump(indent + 2)
 
     def accept(self, visitor):
         return visitor.visit_struct_def(self)
@@ -658,13 +698,15 @@ class Parser:
 
         fields = []
         field_names = set()
+        # Phase 1: parse fields (stop when we see 'fn' or '}')
         while True:
             nxt = self.peek_line()
             if nxt is None:
                 raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct body opened here is never closed")
             if len(nxt) == 1 and nxt[0].kind == "rbrace":
-                self.next_line()
-                self.eat()  # '}'
+                break  # will be consumed after method phase
+            # Stop field loop if the next line starts with 'fn'
+            if nxt[0].kind == "keyword" and nxt[0].text == "fn":
                 break
 
             self.next_line()
@@ -696,7 +738,25 @@ class Parser:
         if not fields:
             raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct must have at least one field")
 
-        return StructDefNode(struct_tok.line, struct_tok.col, name_tok.text, fields)
+        # Phase 2: parse member functions (stop at '}')
+        methods = []
+        method_names = set(field_names.copy())
+        while True:
+            nxt = self.peek_line()
+            if nxt is None:
+                raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct body opened here is never closed")
+            if len(nxt) == 1 and nxt[0].kind == "rbrace":
+                self.next_line()
+                self.eat()  # '}'
+                break
+            if not (nxt[0].kind == "keyword" and nxt[0].text == "fn"):
+                raise_syntax_err(nxt[0].line, nxt[0].col,
+                                  f"expected 'fn' or '}}', got '{nxt[0].text}' (fields must come before member functions)")
+            self.next_line()
+            mfn = self.parse_member_fn_decl(method_names)
+            methods.append(mfn)
+
+        return StructDefNode(struct_tok.line, struct_tok.col, name_tok.text, fields, methods)
 
     def parse_init_expr(self):
         if self.peek() is not None and self.peek().kind == "lbrace":
@@ -778,6 +838,37 @@ class Parser:
 
         body = self.parse_block(inside_fn=True, requires_exit=True)
         return FnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
+
+    def parse_member_fn_decl(self, known_names):
+        """Parse: fn ident := ( [param_list] ) -> type NL block"""
+        fn_tok = self.eat()  # "fn"
+        name_tok = self.expect("ident", "member function name")
+        if name_tok.text in known_names:
+            raise_err(1, name_tok.line, name_tok.col, ue_part=f"'{name_tok.text}'")
+        known_names.add(name_tok.text)
+        self.expect("assignment", "':='")
+        self.expect("lparen", "'('")
+
+        params = []
+        param_names = set()
+        if self.peek() is not None and self.peek().kind != "rparen":
+            params = self.parse_param_list(param_names)
+
+        self.expect("rparen", "')'")
+        self.expect("arrow", "'->'")
+
+        ret_tok = self.peek()
+        if ret_tok is None or ret_tok.kind not in ("typename", "ident"):
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, "expected return type")
+        self.eat()
+
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after member function signature")
+
+        body = self.parse_block(inside_fn=True, requires_exit=True)
+        return MemberFnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
 
     def parse_param_list(self, param_names):
         params = []
@@ -918,7 +1009,7 @@ class Parser:
         return node
 
     def parse_operand(self, is_exit=False):
-        # operand ::= fn_call | ident | constant | "true" | "false"
+        # factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor
         tok = self.peek()
 
         if tok is None:
@@ -933,16 +1024,30 @@ class Parser:
             operand = self.parse_operand(is_exit=is_exit)
             return NotNode(bang.line, bang.col, operand)
         elif tok.kind == "ident":
-            # peek ahead: if next token is '(', it's a function call
+            # Peek ahead: if next token is '(', it's a plain function call
             if self.pos + 1 < len(self.toks) and self.toks[self.pos + 1].kind == "lparen":
                 node = self.parse_fn_call()
+                return node
             else:
                 self.eat()
                 node = VarNode(tok.line, tok.col, tok.text)
             while self.peek() is not None and self.peek().kind == "dot":
-                dot_tok = self.eat()
-                f_tok = self.expect("ident", "field name")
-                node = FieldAccessNode(dot_tok.line, dot_tok.col, node, f_tok.text)
+                dot_tok = self.eat()  # consume '.'
+                f_tok = self.expect("ident", "field or method name")
+                # Check what follows: '(' means member call
+                if self.peek() is not None and self.peek().kind == "lparen":
+                    self.eat()  # consume '('
+                    args = []
+                    if self.peek() is not None and self.peek().kind != "rparen":
+                        args.append(self.parse_expr())
+                        while self.peek() is not None and self.peek().kind == "comma":
+                            self.eat()
+                            args.append(self.parse_expr())
+                    self.expect("rparen", "')'")
+                    node = MemberCallNode(f_tok.line, f_tok.col, node, f_tok.text, args)
+                    break  # member call ends the chain
+                else:
+                    node = FieldAccessNode(dot_tok.line, dot_tok.col, node, f_tok.text)
             return node
         elif tok.kind == "constant":
             self.eat()
@@ -1099,10 +1204,65 @@ class SemanticChecker:
             elif f.type_name not in ("i32", "i64", "bool") and f.type_name not in self.structs:
                 raise_err(11, f.line, f.col, ue_part=f"'{f.type_name}'")
         self.structs[node.name] = node
+        # Validate signatures and check bodies of member functions
+        for mfn in node.methods:
+            for p in mfn.params:
+                self._validate_type(p.type_name, p.line, p.col)
+            self._validate_type(mfn.ret_type, mfn.line, mfn.col)
+            self._check_member_fn_body(node, mfn)
+
+    def _check_member_fn_body(self, struct_node, mfn):
+        """Type-check a member function body with struct fields + params in scope."""
+        saved_scopes = self.scopes
+        saved_fn = self.current_fn
+        # Build field frame (mutable flags preserved)
+        field_frame = {}
+        for f in struct_node.fields:
+            fdecl = DeclNode(f.line, f.col, f.type_name, f.name, f.mutable, None)
+            field_frame[f.name] = fdecl
+        # Build param frame (params are immutable)
+        param_frame = {}
+        for p in mfn.params:
+            pdecl = DeclNode(p.line, p.col, p.type_name, p.name, False, None)
+            param_frame[p.name] = pdecl
+        self.scopes = [field_frame, param_frame]
+        self.current_fn = mfn
+        mfn.body.accept(self)
+        if mfn.body.exit_node is not None:
+            self._check_assignable(mfn.body.exit_node.val, mfn.ret_type,
+                                   mfn.body.exit_node, f"return from '{mfn.name}'")
+        self.current_fn = saved_fn
+        self.scopes = saved_scopes
 
     def visit_fn_decl(self, node):
         # Should only be called via _check_fn_body; fn signatures already registered
         pass
+
+    def visit_member_call(self, node):
+        """Type-check a member call site: resolve receiver type, find method, check args."""
+        receiver_type = node.target_node.accept(self)
+        if receiver_type not in self.structs:
+            self._sem_err(node.line, node.col,
+                          f"type '{receiver_type}' is not a struct and has no member functions")
+        sdef = self.structs[receiver_type]
+        mfn = None
+        for m in sdef.methods:
+            if m.name == node.member_name:
+                mfn = m
+                break
+        if mfn is None:
+            self._sem_err(node.line, node.col,
+                          f"struct '{receiver_type}' has no member function '{node.member_name}'")
+        if len(node.args) != len(mfn.params):
+            self._sem_err(node.line, node.col,
+                          f"member function '{node.member_name}' expects {len(mfn.params)} argument(s), got {len(node.args)}")
+        for arg, param in zip(node.args, mfn.params):
+            arg.accept(self)
+            self._check_assignable(arg, param.type_name, node,
+                                   f"pass argument to '{param.name}'")
+        node.mfn = mfn
+        node.type = mfn.ret_type
+        return node.type
 
     def _check_struct_inits(self, sdef, inits, node, prefix):
         for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
@@ -1418,6 +1578,17 @@ class CodeGenVisitor:
         struct_type.set_body(*field_types)
         TYPES[node.name] = struct_type
         self.struct_defs[node.name] = node
+        # Declare IR functions for each member function
+        for mfn in node.methods:
+            param_types = [ir.PointerType(struct_type)] + [TYPES[p.type_name] for p in mfn.params]
+            ret_llvm = TYPES[mfn.ret_type]
+            fn_type = ir.FunctionType(ret_llvm, param_types)
+            ir_fn = ir.Function(module, fn_type, name=f"m_{node.name}_{mfn.name}")
+            self.ir_functions[f"{node.name}.{mfn.name}"] = ir_fn
+            self.fn_nodes[f"{node.name}.{mfn.name}"] = mfn
+        # Generate member function bodies
+        for mfn in node.methods:
+            self._gen_member_fn_body(node, mfn)
 
     def alloca_in_entry(self, typ, name):
         entry_bb = self.builder.function.entry_basic_block
@@ -1432,6 +1603,69 @@ class CodeGenVisitor:
 
     def visit_fn_decl(self, node):
         pass  # handled by visit_program two-pass
+
+    def _gen_member_fn_body(self, struct_node, mfn):
+        """Generate IR for a member function; first param is a pointer to the struct (implicit self)."""
+        ir_fn = self.ir_functions[f"{struct_node.name}.{mfn.name}"]
+        struct_type = TYPES[struct_node.name]
+
+        saved_builder = self.builder
+        saved_symbols = self.symbols
+        saved_fn = self.current_fn
+        saved_fn_node = self.current_fn_node
+        saved_param_ptrs = getattr(self, '_param_ptrs', {})
+        saved_field_ptrs = getattr(self, '_field_ptrs', {})
+
+        entry_bb = ir_fn.append_basic_block("entry")
+        fn_builder = ir.IRBuilder(entry_bb)
+        self.builder = fn_builder
+        self.symbols = {}
+        self._param_ptrs = {}
+        self._field_ptrs = {}
+        self.current_fn = ir_fn
+        self.current_fn_node = mfn
+
+        # ir_fn.args[0] is the implicit self pointer
+        self_ptr = ir_fn.args[0]
+        # Expose each struct field as a GEP into self
+        for idx, f in enumerate(struct_node.fields):
+            field_ptr = fn_builder.gep(self_ptr,
+                                       [ir.Constant(I32, 0), ir.Constant(I32, idx)],
+                                       name=f.name)
+            self._field_ptrs[f.name] = field_ptr
+
+        # Allocate and store explicit params (args[1:])
+        for i, p in enumerate(mfn.params):
+            llvm_type = TYPES[p.type_name]
+            ptr = fn_builder.alloca(llvm_type, name=p.name)
+            fn_builder.store(ir_fn.args[i + 1], ptr)
+            self._param_ptrs[p.name] = ptr
+
+        mfn.body.accept(self)
+
+        self.builder = saved_builder
+        self.symbols = saved_symbols
+        self.current_fn = saved_fn
+        self.current_fn_node = saved_fn_node
+        self._param_ptrs = saved_param_ptrs
+        self._field_ptrs = saved_field_ptrs
+
+    def visit_member_call(self, node):
+        """Emit a call to a member function, passing a pointer to the receiver struct."""
+        receiver_type = node.target_node.type
+        ir_fn = self.ir_functions[f"{receiver_type}.{node.member_name}"]
+        mfn = node.mfn
+
+        # Get a pointer to the receiver (need an alloca if it's a value)
+        self_ptr = self.get_lvalue_ptr(node.target_node)
+
+        # Evaluate explicit args
+        coerced = []
+        for arg, param in zip(node.args, mfn.params):
+            v = arg.accept(self)
+            coerced.append(self.coerce(v, arg.type, param.type_name))
+
+        return self.builder.call(ir_fn, [self_ptr] + coerced)
 
     def _store_struct_fields(self, ptr, sdef, inits, name_prefix):
         for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
@@ -1467,6 +1701,8 @@ class CodeGenVisitor:
                 return self.symbols[expr.decl]
             if self.current_fn is not None and hasattr(self, '_param_ptrs') and expr.name in self._param_ptrs:
                 return self._param_ptrs[expr.name]
+            if self.current_fn is not None and hasattr(self, '_field_ptrs') and expr.name in self._field_ptrs:
+                return self._field_ptrs[expr.name]
             return self.symbols[expr.decl]
         elif isinstance(expr, FieldAccessNode):
             obj_ptr = self.get_lvalue_ptr(expr.obj)
@@ -1482,7 +1718,14 @@ class CodeGenVisitor:
         return self.builder.load(field_ptr, name=node.field_name)
 
     def visit_assign(self, node):
-        ptr = self.symbols[node.decl] if node.decl in self.symbols else self._param_ptrs[node.name]
+        if node.decl in self.symbols:
+            ptr = self.symbols[node.decl]
+        elif hasattr(self, '_param_ptrs') and node.name in self._param_ptrs:
+            ptr = self._param_ptrs[node.name]
+        elif hasattr(self, '_field_ptrs') and node.name in self._field_ptrs:
+            ptr = self._field_ptrs[node.name]
+        else:
+            ptr = self.symbols[node.decl]  # will raise KeyError with a clear message
         if node.field_chain:
             curr_ptr = ptr
             for idx, fname in zip(node.field_indices, node.field_chain):
@@ -1627,6 +1870,8 @@ class CodeGenVisitor:
             return self.builder.load(ptr, name=node.name)
         if self.current_fn is not None and hasattr(self, '_param_ptrs') and node.name in self._param_ptrs:
             return self.builder.load(self._param_ptrs[node.name], name=node.name)
+        if self.current_fn is not None and hasattr(self, '_field_ptrs') and node.name in self._field_ptrs:
+            return self.builder.load(self._field_ptrs[node.name], name=node.name)
         ptr = self.symbols[node.decl]
         return self.builder.load(ptr, name=node.name)
 
