@@ -1,0 +1,6 @@
+fn twice := (i32 x) -> i32
+{
+exit x * 2
+}
+i32 twice{3}
+exit twice(4)

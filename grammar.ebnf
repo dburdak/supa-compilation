@@ -40,7 +40,7 @@ block ::= "{" NL { statement } [ finish NL ] "}" NL
 
 finish ::= "exit" factor
 
-statement ::= declaration | assignment | if | while
+statement ::= declaration | assignment | if | while | print | lambda
 
 factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor
 
@@ -49,3 +49,10 @@ expr ::= arith [ ("==" | "!=") arith ]
 arith ::= term { ("+" | "-") term }
 
 term ::= factor { "*" factor }
+
+lambda ::= "fn" ident ":=" "[" [ capture_list ] "]"
+           "(" [ param_list ] ")" "->" type NL block
+
+capture_list ::= capture { "," capture }
+
+capture ::= [ "mut" ] ident

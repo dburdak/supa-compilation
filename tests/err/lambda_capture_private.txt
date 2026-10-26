@@ -1,0 +1,6 @@
+i32 k{3}
+fn identity := [k]() -> i32
+{
+exit k
+}
+exit identity.k

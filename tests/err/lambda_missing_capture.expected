@@ -1,0 +1,1 @@
+compilation error: line 4:6: 'k' is not captured by lambda 'use_k': add it to the capture list

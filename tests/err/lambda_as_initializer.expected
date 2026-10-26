@@ -1,0 +1,1 @@
+compilation error: line 5:5: lambda value cannot be used to initialise 'value': its type has no name

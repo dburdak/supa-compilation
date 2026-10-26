@@ -1,0 +1,9 @@
+fn outer := () -> i32
+{
+fn identity := [](i32 x) -> i32
+{
+exit x
+}
+exit identity
+}
+exit outer()
