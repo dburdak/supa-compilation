@@ -26,6 +26,17 @@ This version adds full support for user-defined structs, functions, recursion, a
   - Named identified struct types in LLVM IR context (`%"Point" = type { i32, i32 }`).
   - Access to fields via GEP indices computed during semantic analysis.
 
+## Practice 8 Features (Callable Objects)
+
+A struct with a member function named `call` can be invoked like a function (`triple(14)`), with the semantic
+pass rewriting the call to the existing member-call representation. This also works for callable struct fields
+(`shape.scale(7)`). Mutable `call` methods follow the same mutability rules as other member functions.
+
+Lambda statements capture visible variables by value into compiler-generated closure structs. Captures are
+constant inside the lambda unless declared `mut`; a mutable capture makes the closure's `call` method mutating.
+Closure calls use the same callable-object semantics as structs with a `call` member function. Use
+`--ast-checked` to inspect the AST after semantic lowering.
+
 ## Requirements
 
 - Python 3.x
@@ -54,13 +65,14 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
 ## Usage
 
 ```bash
-python compiler.py <source_path> [<output_path>] [--tokens] [--ast]
+python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-checked]
 ```
 
 - `source_path` (Required): Path to the `.txt` source file.
 - `output_path` (Optional, defaults to `None`): Path where the generated LLVM IR (`.ll`) will be saved.
 - `--tokens` (Optional): Prints the token stream to `stdout` and continues compilation.
 - `--ast` (Optional): Prints the Abstract Syntax Tree (AST) to `stdout` and **exits immediately with code 0** (no semantic checking, no code generation, and no `.ll` file is written).
+- `--ast-checked` (Optional): Performs semantic checking, prints the checked AST (including generated lambda closure structs), and exits without code generation.
 
 ### `--ast` Dump Format
 The AST dump uses indentation to represent the tree structure (each level adds 2 spaces):

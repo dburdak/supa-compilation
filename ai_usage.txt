@@ -1,541 +1,678 @@
-================================================================================
-Practice 7: Member functions in structs
-================================================================================
-Gemini:
-Тестування методології структур у мові програмування
-https://gemini.google.com/app/86ab17bf487e60c9
+Розуміння Callable об'єктів у структурах
+https://gemini.google.com/app/e2e8983f9e496914
 
-User prompt: мені потрібно зробити завдання: TASK 1 — MEMBER FUNCTION DECLARATION AND CALL (1 POINT) A struct may declare functions after its fields. A member function is declared like any other function, and it is called on an object with .: struct Point { i32 mut x i32 mut y fn d2 := () -> i32 { i32 r{x * x + y * y} exit r } fn shift := (i32 dx) -> i32 { x := x + dx exit x } } struct Circle { Point center i32 radius fn area2 := () -> i32 { i32 a{radius * radius * 3} exit a } } Point mut p{3, 4} i32 d{p.d2()} i32 nx{p.shift(2)} Circle c{p, 2} i32 a{c.area2()} i32 cd{c.center.d2()} i32 result{d + nx + a + cd} exit result Expected: Program exit with result 83. Here d is 25; shift moves p.x to 5 and returns it; c.center is a copy of the moved point, so cd is 41; area2 is 12. 1 • Fields come first, then member functions. A field after a member function is an error at that field; a member function before the first field is an error at its fn. • A field and a member function of one struct cannot have the same name, and two member functions of one struct cannot either. • A call obj.f(...) stands wherever a factor can, also after exit. The object can be a field chain: c.center.d2(). The call ends the chain: nothing follows its ). A call alone is still not a statement. • A member function is called on an object, never on a type: Point.d2() is an error. struct ::= "struct" ident NL "{" NL field_decl { field_decl } { fn } "}" NL member_call ::= ident { "." ident } "." ident "(" [ expr { "," expr } ] ")" factor ::= number | "true" | "false" | ident | field | call | member_call | "!" factor першою справою я хочу продумати які тести будуть на ці функції всередині структури. Ось мої варіанти "місць" на перевірку в тестах: - declaration of the struct where member function declared before any of fields, second case in the middle between field declarations - same name for the fiels and the func, and two funcs with same name - usage of the func without braces - a call of func without any assignment only the call - func call of the type not the obj - and normal cases described in the task for some of these test cases I don't know how the program should handle it, so please write some options and also write the full list of test cases if I forgot something
-Response: Твій список «слабких місць» для тестування дуже точний і повністю покриває базові вимоги завдання.
-Нижче розібрано, як саме програма має реагувати (очікувана поведінка) на ті випадки, у яких виникли сумніви, а також додано повний структурований чек-лист тестів (включаючи випадки, які ти міг пропустити).
-Розбір твоїх питань (Як програма має обробляти ці випадки)
-Member function перед полями або посередині полів:
-Поведінка: Помилка компіляції / синтаксичний аналіз (Syntax/Parser Error).
-Чому: Згідно з граматикою field_decl { field_decl } { fn }, спочатку мають іти усі поля, а потім усі функції.
-Повідомлення:
-Якщо fn перед першим полем — синтаксична помилка на ключовому слові fn.
-Якщо поле після fn — синтаксична помилка на цьому полі (парсер уже чекає лише функції або закриваючу дужку }).
-Одне ім'я для поля і функції, або дві функції з однаковим ім'ям:
-Поведінка: Помилка семантичного аналізу / Таблиці символів (Semantic Error: Duplicate Identifier).
-Чому: Область видимості (scope) структури не дозволяє повторне оголошення ідентифікатора в межах одного типу.
-Виклики функції без дужок (наприклад, p.d2 замість p.d2()):
-Поведінка: Синтаксична помилка (Syntax Error).
-Чому: У вашій граматиці немає понять «першокласних функцій» чи «вказівників на методи». Правило member_call чітко вимагає дужки: ident { "." ident } "." ident "(" ... ")".
-Виклик функції як окремий Statement (без присвоєння, наприклад: p.shift(2)):
-Поведінка: Синтаксична помилка (Syntax Error).
-Чому: У вимогах чітко вказано: «A call alone is still not a statement» та «A call obj.f(...) stands wherever a factor can». Виклик може бути тільки всередині виразу (присвоєння, exit, оператор тощо).
-Виклик функції від типу, а не об'єкта (Point.d2()):
-Поведінка: Семантична помилка / Помилка типів (Type/Semantic Error).
-Чому: Ліва частина оператора . має обчислюватися у змінну/об'єкт (існуючий екземпляр), а не в назву типу (статичних методів немає).
-Повний чек-лист тестів (Test Cases)
-Ділимо тести на дві категорії: Негативні (Negative/Error cases) та Позитивні (Positive/Happy path cases).
-1. Негативні тести (Синтаксичні та семантичні помилки)
+User prompt: що в цьому завданні маєтьсяя на увазі під callable, як це викликати структуру, бо мені здажться я такого ще не бачила: TASK 1 — CALLABLE OBJECTS (1 POINT) A struct that declares a member function named call can be called like a function: triple(14) means triple.call(14). The longer form stays legal. struct Scale { i32 k fn call := (i32 v) -> i32 { i32 r{v * k} exit r } } struct Counter { i32 mut n fn call := () -> i32 { n := n + 1 exit n } } struct Shape { Scale scale i32 side fn grown := () -> i32 { i32 g{scale(side)} exit g } } Scale triple{3} Counter mut c{0} Shape s{{2}, 5} print(triple(14)) print(triple.call(14)) print(s.scale(7)) print(s.grown()) i32 a{c()} i32 b{c()} print(c) i32 r{a * 10 + b} exit r Expected output: 42 42 14 10 Counter{n: 2} Program exit with result 12 scale is a field of Shape, so s.scale(7) is s.scale.call(7); inside grown, scale(side) calls the field of its own object. The call of Cou
+Response: У цьому завданні поняття callable (виклиτώваний об'єкт) означає, що екземпляр структури (об'єкт) можна викликати як звичайну функцію, використовуючи круглі дужки ().
+Це схоже на концепцію перевантаження оператора виклику функції в інших мовах (наприклад, __call__ у Python або operator() у C++).
+Як це працює?
+У цій мові програмування діє правило: якщо всередині структури визначено метод із назвою call, то цей об'єкт стає «callable».
+Коли ви пишете ім'я об'єкта з дужками, мова автоматично розгортає це у виклик методу call.
+1. Приклад зі Scale:
+struct Scale
+{
+ i32 k
+ fn call := (i32 v) -> i32
+ {
+ i32 r{v * k}
+ exit r
+ }
+}
 
-ID
-Назва тесту
-Приклад коду / Опис
-Очікуваний результат
-N1
-fn перед першим полем
-struct S { fn f := () -> i32 { exit 0 } i32 mut x }
-Syntax Error на fn
-N2
-Поле після fn
-struct S { i32 x fn f := () -> i32 { exit 0 } i32 y }
-Syntax Error на полях після fn
-N3
-Конфлікт імені поля і fn
-struct S { i32 x fn x := () -> i32 { exit 0 } }
-Semantic Error: Duplicate name x
-N4
-Конфлікт двох fn з однаковим ім'ям
-struct S { i32 x fn f := () -> i32 { exit 0 } fn f := () -> i32 { exit 1 } }
-Semantic Error: Duplicate function f
-N5
-Виклик без дужок
-i32 a{p.d2}
-Syntax Error (очікується ()
-N6
-Standalone call (виклик як statement)
-p.shift(2) окремим рядком
-Syntax Error / Invalid statement
-N7
-Виклик від імені типу
-Point.d2()
-Semantic Error: Point is a type, not an instance
-N8
-Спроба продовжити ланцюжок після )
-c.center.d2().something
-Syntax Error (після ) в member_call нічого не йде)
-N9
-Виклик неіснуючої функції
-p.unknown_func()
-Semantic Error: Function not found in struct
-N10
-Непередані / зайві аргументи
-p.shift() або p.d2(5)
-Semantic Error: Mismatch in argument count
-N11
-Виклик функції від не-структурного типу
-i32 x{5} x.d2()
-Semantic Error: Type i32 has no member functions
-N12
-Спроба виклику приватного/відсутнього поля в ланцюжку
-c.unknown_field.d2()
-Semantic Error: Field not found
-
-2. Позитивні тести (Валідна поведінка)
-
-ID
-Назва тесту
-Приклад коду / Опис
-Очікуваний результат
-P1
-Базовий виклик без аргументів
-p.d2() (повертає x2+y2)
-Правильне значення виразу
-P2
-Виклик з аргументами та мутацією полів
-p.shift(2) (змінює x всередині p та повертає нове значення)
-Поле об'єкта мутує, значення повертається
-P3
-Ланцюжок полів (Field chain)
-c.center.d2()
-Коректний доступ до вкладеного об'єкта та його методу
-P4
-Виклик як factor у виразі
-i32 res{ p.d2() + c.area2() * 2 }
-Обчислення складного виразу з кількома викликами
-P5
-Виклик усередині exit
-exit p.d2()
-Коректне завершення програми з результативним кодом
-P6
-Вкладені виклики (якщо дозволено граматикою аргументів)
-p.shift(p.d2())
-Аргумент обчислюється першим, потім викликається зовнішня функція
-P7
-Робота з копією об'єкта (з умови)
-Створення Circle c{p, 2} після мутації p. Перевірка, що c.center має незалежний стан від p.
-Незалежні значення p та c.center
-P8
-Комплексний підсумковий тест (з опису TASK 1)
-Повний приклад із завдання (result = 83)
-Програма завершується з кодом 83
+Scale triple{3}
 
 
-User prompt: що взагалі треба зробити в цьому завданні та що це за два варіанта побудови, які переваги та мінуси у кожного з них з огляду на подальше розширення мови: Names inside a member function. • A name is looked up among the parameters and local variables first, then among the fields of the structure. A parameter or a local named like a field hides the field. • A call f(...) inside a member function looks among the member functions of the same structure first, then among the global functions. A member function hides a global function with the same name. Inside Point, d2() calls d2 on the same object. • As in any function, the body does not see the top-level variables. A field without mut cannot be assigned, also inside a member function. The object is passed by address. In the IR a member function is a function of the module named after the structure and the function, Point_shift. Its first parameter is a pointer to the object the function is called on; the language has no name for it, we call it this. A call passes the address of the object: its alloca, or a gep into it for c.center.d2(). A field inside the body is a gep on this, so x := x + dx is a gep, a load, an add and a store. If the object is passed by value, shift changes a copy, and the program above prints 67 instead of 83. Choose one of two ways to get there: • New nodes all the way. MemberFn and MemberCall stay in the tree; the semantic pass and the code generator each get a method for them. • Rewrite after parsing. Every member function becomes a global function Point_shift with a first parameter this, every field x in its body becomes this.x, every call p.shift(2) becomes Point_shift(p, 2). Mark the generated functions, so that code generation passes their first argument by address. Names may contain _, so keep the generated functions apart from the functions a program declares. The mutation rule. A member function is mutating if it assigns to a field of its object, or calls a mutating member function on its object or on one of its fields. A mutating function may be called only through a chain where every 2 link is mut: the object and each field on the way. A non-mutating one may be called on anything. With the structs of Task 1 (the comments only explain the lines, they are not part of the language): Point q{3, 4} i32 a{q.d2()} # fine: d2 does not change q i32 b{q.shift(1)} # error: shift changes q, and q is const Circle mut c{q, 2} i32 e{c.center.shift(1)} # error: center is const A local variable named like a field does not make a function mutating. Member functions may call each other in a cycle, so decide which ones are mutating after all the bodies are checked: mark the ones that assign a field, then repeat until no new function gets marked. Errors. Each one with line:column; the wording is yours: • a field after a member function, a member function before the first field, a field and a member function with the same name; • a name that is not a parameter, a local or a field, used inside a member function; • a call of a member function the type does not declare (c.d2() on a Circle), a call on an i32, a call on a type, a wrong number or type of arguments; • a mutating call through a const link; an assignment to a const field inside a member function; an exit of the wrong type from a member function. TASK 3 — READ() AND PRINT (0.5 
-Response: 1. Що взагалі потрібно зробити в цьому завданні?
-Мета завдання — додати в мову методи структур (member functions), підтримку їх виклику через крапку (obj.f()), правила видимості імен (scoping), передачу об'єкта за адресою (поінтером) та перевірку мутабельності (const / mut safety).
-Ось ключові блоки реалізації:
-Реалізувати область видимості (Scope) всередині методів:
-Пошук змінних: Спочатку параметри та локальні змінні → потім поля структури. Локальна змінна «ховає» (hides) одноіменне поле.
-Пошук функцій: При виклику f(...) всередині методу — спочатку шукаємо методи цієї ж структури, а потім глобальні функції.
-Доступ до top-level змінних заборонений.
-Згенерувати Intermediate Representation (IR / LLVM IR):
-Об'єкт передається у функцію за адресою (по вказівнику this).
-Метод перетворюється на звичайну функцію модуля з назвою Struct_func (наприклад, Point_shift).
-Перший параметр цієї функції — вказівник на об'єкт (this).
-Будь-який доступ до поля x всередині методу — це GEP (GetElementPointer) від this, потім load/store.
-Виклик c.center.d2() передає адресу вкладеного поля center через GEP.
-Реалізувати правило мутабельності (The Mutation Rule):
-Функція вважається mutating, якщо вона:
-Робить присвоєння своєму полю (x := ...).
-Викликає іншу mutating функцію на своєму об'єкті або на своєму полі.
-Алгоритм обчислення: Через можливі циклічні виклики методів (A→B→A) мутабельність обчислюється після перевірки всіх тіл функцій: спочатку позначаються ті, де є пряме присвоєння полян, а далі запускається цикл розповсюдження прапорця (fixed-point iteration), поки нові функції перестануть позначатися як mutating.
-Перевірка виклику: Mutating функцію можна викликати тільки якщо весь ланцюжок доступів складається з mut (наприклад, c.center.shift() впаде з помилкою, якщо center не має позначки mut).
-2. Порівняння двох варіантів побудови (Architectural Approaches)
-Вимоги пропонують вибір між двома підходами до реалізації в компіляторі.
-Варіант 1: New nodes all the way (Класичний / AST-Native)
-Нові вузли MemberFn та MemberCall залишаються в AST-дереві на всіх етапах.
-Семантичний аналіз (Sema): Пишеться окремий метод analyze_member_call та analyze_member_fn. Sema знає про поля структури і обробляє доступ до них прямо під час обходу AST.
-Генерація коду (CodeGen): Додається окремий метод codegen_member_call, який сам генерує GEP для this, та codegen_member_fn, який генерує сигнатуру з першим аргументом-вказівником.
-Переваги:
-Точний зв'язок з вихідним кодом: AST дзеркально відображає те, що написав користувач. Повідомлення про помилки (line:column) генерувати набагато простіше й точніше.
-Прозорість аналізу: Під час семантичного аналізу легко перевіряти типи, доступність та розраховувати прапорець mutating без маніпулювання додатковими аргументами.
-Гнучкість у генерації коду: Можна точно контролювати ABI передачі this (наприклад, позначати sret, nonnull, dereferenceable у LLVM).
-Мінуси:
-Потрібно розширювати кожен прохід (Pass) компілятора. Якщо у вас є Sema, TypeChecker, Optimizer, CodeGen, Linter — у кожен із них треба додати нові класи/методи для MemberFn та MemberCall.
-Більше дублювання коду в CodeGen (локальна змінна шукається так, а поле через this — інакше).
-Варіант 2: Rewrite after parsing (Децукоризація / AST Lowering)
-Одразу після парсингу AST «переписується» (Rewritten/Lowered) у базові конструкції мови:
-struct Point { fn shift... } перетворюється на звичайну глобальну функцію Point_shift(Point* this, i32 dx).
-Будь-яке поле x всередині методу замінюється на вузол this.x.
-Виклик p.shift(2) замінюється на виклик звичайної функції Point_shift(&p, 2).
-Переваги:
-Простота CodeGen: Генератор коду взагалі не знає про існування методів! Він просто генерує звичайні функції та їх виклики.
-Мінімум нового коду: Не потрібно додавати складну логіку генерації вказівників в IR для нових вузлів, бо ви перевикористовуєте механізм звичайних викликів функцій.
-Мінуси:
-Складність повідомлень про помилки: Якщо в згенерованому коді виникає помилка (наприклад, помилка типів або мутабельності), користувачеві важко вивести зрозуміле повідомлення, бо в AST вже немає оригінального p.shift(2), а є Point_shift(&p, 2).
-Захист від колізій імен: Потрібно розробляти систему манглінгу імен (Name Mangling), щоб створена функція Point_shift випадково не перекрила реальну функцію користувача fn Point_shift(), яку він сам міг написати в коді.
-Необхідність службових метаданих: Компілятор все одно має пам'ятати, що перший аргумент this треба передавати за адресою, навіть якщо мова за замовчуванням передає структури за значенням (by-value).
-3. Аналіз з огляду на подальше розширення мови
-Якщо ваша мова буде розвиватися далі, вибір архітектури має критичне значення:
+Ви створюєте об'єкт triple типу Scale, де k = 3.
+Завдяки тому, що у структури є метод call, ви можете написати: triple(14)
+Це повністю еквівалентно повному запису: triple.call(14)
+Всередині методу call параметр v дорівнює 14, множиться на k (3), виходить 42.
+2. Приклад із полем усередині Shape:
+У завданні написано:
+scale is a field of Shape, so s.scale(7) is s.scale.call(7); inside grown, scale(side) calls the field of its own object.
+Це означає, що оскільки scale всередині Shape є полем типу Scale (а тип Scale є callable), ви можете викликати це поле прямо як функцію:
+scale(side) всередині методу grown означає scale.call(side).
+3. Приклад із Counter:
+struct Counter
+{
+ i32 mut n
+ fn call := () -> i32
+ {
+ n := n + 1
+ exit n
+ }
+}
 
-Подальша фіча мови
-Варіант 1: New nodes all the way
-Варіант 2: Rewrite after parsing
-Успадкування / Віртуальні методи (Dynamic Dispatch / vtables)
-Суттєво виграє. Потрібно зберігати інформацію про віртуальність у вузлі методу. Переписати це у звичайний виклик на етапі парсингу практично неможливо — потрібен семантичний аналіз типів.
-Програє. Децукоризація до відома типів неможлива. Доведеться скасовувати цей підхід або додавати складний аналіз типів перед децукоризацією.
-Перевантаження методів (Method Overloading)
-Виграє. Пошук потрібної функції за типами аргументів природно лягає на фазу Sema.
-Програє. Парсер не знає типів, тому не зможе згенерувати правильне ім'я функції на етапі парсингу.
-Generics / Шаблони (Point<T>)
-Виграє. Методи мономорфізуються разом із типом у Sema/Lowering фазі.
-Ускладнюється. Доведеться генерувати манглені імена з урахуванням загальних типів ще до їх визначення.
-Інтерфейси / Трейти (Interfaces / Traits)
-Виграє. Дозволяє гнучко додавати перевірки відповідності інтерфейсу на рівні таблиці символів.
-Програє. Потрібна таблиця віртуальних методів, яку важко виразити простим переписуванням AST.
-Швидкий старт / Навчальний проєкт
-Потрібно трохи більше рутинного коду.
-Суттєво виграє. Якщо це разове лабораторне завдання і мова розширюватися далі не буде — це найшвидший шлях реалізації.
+Counter mut c{0}
+i32 a{c()} // те ж саме, що c.call() -> збільшує n до 1 і повертає 1
+i32 b{c()} // збільшує n до 2 і повертає 2
 
-Резюме та рекомендація
-Якщо це завершене лабораторне завдання і мета — просто швидко отримати працюючий код для складання TASK 1, обирай Варіант 2 (Rewrite after parsing). Це зекономить час на генерації LLVM IR.
-Якщо ти будуєш повноцінний компілятор із заділом на майбутнє (ООП, трейти, generics, якісна діагностика помилок), обирай Варіант 1 (New nodes all the way). Це чистіша та більш масштабована архітектура компілятора.
 
-User prompt: Як перевіряти ланцюжок викликання (наприклад, c.center.shift(1)), де кожен проміжний крок або об'єкт мусить бути оголошений з mut, і як будувати цю перевірку в AST/семантичному аналізаторі?
-Response: Перевірка ланцюжка доступів (наприклад, c.center.shift(1)) на мутабельність — це одна з найцікавіших частин семантичного аналізу. Вона складається з двох етапів:
-Збір інваріанта ланцюжка (L-value path traversal) під час виклику.
-Аналіз мутабельності методів (Fixed-point iteration) для визначення, чи є сам метод mutating.
-1. Логіка перевірки ланцюжка виклику (Chain Validation)
-У виразі c.center.shift(1) у вас є два елементи, які треба перевірити:
-Ланцюжок ш шляху (Path): Об'єкт c та поле center.
-Сам метод: shift(1).
-Правило звучить так:
-Якщо метод є mutating, то кожна ланка у ланцюжку доступу (c і center) повинна мати позначку mut. Якщо метод non-mutating (наприклад, d2()), ланцюжок може бути повністю const (не-mut).
-2. Як реалізувати це в Семантичному Аналізаторі (Sema)
-Аналіз зручно розбити на дві допоміжні функції у вашому рекурсивному обході AST:
-Крок 1: Обчислення типу та перевірка мутабельності ланцюжка (check_lvalue_mutability)
-Створіть функцію, яка рекурсивно занурюється в ліву частину доступу і повертає true, тільки якщо весь ланцюжок до цієї точки є мутабельним.
-Псевдокод (на мові Rust / C++ подібному системному коді):
-// Повертає (Type, is_mut) для виразу доступу
-fn check_path_mutability(expr: &Expr, env: &SymbolTable) -> (Type, bool) {
-    match expr {
-        // Базовий випадок: Змінна (наприклад, `c` або `p`)
-        Expr::Variable(name) => {
-            let symbol = env.lookup(name);
-            let is_mut = symbol.is_mutable; // Чи була змінна оголошена як `mut`
-            return (symbol.type, is_mut);
-        }
+Тут c() викликає метод call для лічильника, який щоразу збільшує внутрішню змінну n на одиницю.
+Підсумок
+Коли ви бачите синтаксис на кшталт обєкт(аргумент), просто знайте, що компілятор шукає всередині цього об'єкта метод call і викликає його за вас. Це просто зручне скорочення (синтаксичний цукор).
 
-        // Поле структури (наприклад, `c.center`)
-        Expr::FieldAccess { target, field_name } => {
-            // 1. Спочатку рекурсивно перевіряємо ліву частину (`c`)
-            let (target_type, target_is_mut) = check_path_mutability(target, env);
-            
-            // 2. Шукаємо поле в структурі
-            let struct_def = env.lookup_struct(&target_type);
-            let field_info = struct_def.find_field(field_name);
-            
-            // 3. Ланцюжок є mut ТІЛЬКИ якщо і ліва частина mut, і сам запис поля mut!
-            let path_is_mut = target_is_mut && field_info.is_mutable;
-            
-            return (field_info.type, path_is_mut);
-        }
+User prompt: це типу атрибути
+Response: Не зовсім. Тут варто розрізняти дві різні речі: поля (атрибути) та методи (функції).
+Атрибути (або поля) — це дані, які зберігаються всередині структури. Наприклад, i32 k у Scale, i32 mut n у Counter, чи scale і side у Shape. Вони просто зберігають значення.
+call — це метод (функція), а не атрибут. Це дія, яку об'єкт може виконувати.
+Чому у вас могло виникнути таке відчуття?
+Через те, як працює рядок s.scale(7) у структурі Shape:
+scale всередині Shape — це звичайне поле (атрибут), яке містить в собі об'єкт типу Scale.
+Але оскільки тип Scale має всередині метод call, сам цей об'єкт стає callable (виклиτώваним).
+Тому ви можете викликати це поле напряму як функцію: s.scale(7) замість того, щоб писати якийсь довший код.
+Тобто самі дані (атрибути) можуть бути виклиτώваними, якщо їхній тип має функцію call.
 
-        _ => error("Expected variable or field access in member call"),
+User prompt: ну тобто властивості
+Response: Можна сказати й так для загального розуміння, але з технічної точки зору це не «властивість» (у звичному для багатьох мов програмування сенсі гетерів/сетерів), а звичайне поле (змінна).
+Різниця ось у чому:
+Поле (атрибут) просто зберігає дані. У Shape поле scale зберігає цілий об'єкт типу Scale.
+Оскільки сам тип Scale має всередині метод call, цей об'єкт стає виклиτώваним (callable).
+Тобто ви викликаєте не якусь «властивість», а сам об'єкт, що лежить у цьому полі, за допомогою круглих дужок ().
+
+User prompt: У моєму парсері x() створюється як звичайний вузол FnCall, бо парсер не знає, чи x — змінна, чи функція. Де краще перетворювати його на виклик x.call() — у семантичному аналізі чи окремим проходом по AST? Поясни плюси й мінуси з погляду type checking та codegen
+Response: Це класична задача дизайну компілятора: перетворення синтаксичного цукру (syntactic sugar) на канонічну форму (desugaring).
+Оскільки парсер не знає типів (він оперує лише токенами), він не може відрізнити виклик звичайної функції від виклику об'єкта. Для цього обов'язково потрібна таблиця символів (symbol table) та інформація про типи.
+Найкраще робити це під час семантичного аналізу (type checking) або одразу після нього як окремий прохід десахаризації (desugaring pass).
+Ось детальний розбір плюсів і мінусів обох варіантів з погляду type checking та codegen.
+Варіант 1: Перетворення прямо в семантичному аналізаторі (Type Checker)
+Під час обходу AST у вас є доступ до контексту та типів. Коли ви зустрічаєте FnCall(callee, args):
+Ви перевіряєте, чим є callee (глобальна функція, змінна, поле).
+Якщо це звичайна функція — залишаєте як є.
+Якщо це змінна/поле типу Scale (який має метод call) — ви перетворюєте цей вузол AST прямо на льоту у вузол MethodCall(callee, "call", args) (або одразу валідуєте його як виклик методу).
+👍 Плюси:
+Ефективність: Ви робите все за один прохід (one-pass або комбінований прохід). Не потрібно зайвий раз бігати по всьому AST.
+Зручність валідації: Щойно ви перетворили x() на x.call(), ви можете відразу передати його стандартному механізму перевірки аргументів методів (перевірити типи v, чи відповідають вони сигнатурі call).
+👎 Мінуси:
+Змішування відповідальності: Семантичний аналізатор починає не лише перевіряти типи, а й змінювати структуру AST (mutating AST). Це може ускладнити код самого аналізатора, якщо він стане занадто роздутим.
+Варіант 2: Окремий прохід десахаризації (Desugaring Pass) одразу після Type Checking
+Ви розділяєте процес на два чіткі етапи:
+Type Checker: Спочатку проходить по всьому AST, розпізнає всі ноди, визначає типи для кожної змінної та «анотує» вузол FnCall додатковою інформацією (наприклад, додає посилання на те, що x насправді є об'єктом із методом call).
+Desugaring Pass: Окремий невеликий прохід бере анотований AST і переписує всі такі FnCall у повноцінні MethodCall.
+👍 Плюси:
+Чистота архітектури (Separation of Concerns): Type checker займається виключно перевіркою типів і нічого не ламає в AST. А окремий прохід чітко виконує одну задачу — перетворення синтаксичного цукру.
+Легше дебажити: Ви можете вивести AST після Type Checker (побачити, що тип визначено правильно), а потім вивести AST після Desugaring (побачити, що x() успішно перетворився на x.call()).
+👎 Мінуси:
+Додатковий прохід по AST: Потрібно ще раз обходити дерева, що незначно збільшує час компіляції (хоча для навчальних чи середніх компіляторів це не критично).
+Вплив на Codegen (Генерацію коду)
+З погляду генерації коду (LLVM IR, ASM або байт-код) найголовніше — повністю позбутися FnCall для змінних до того, як код дійде до генератора.
+Якщо ви перетворите x() на x.call() на етапі семантики або десахаризації, то Codegen взагалі не потрібно змінювати. Для генератора коду це буде звичайнісінький виклик методу структури (MethodCall), який він уже вміє обробляти (передаючи this / self як перший аргумент).
+Якщо ж ви залишите це на відкуп генератору коду, то код генерації стане «брудним»: йому доведеться на генерації перевіряти: "Ой, це виклик функції, але це не функція, а змінна, тому я маю згенерувати код звернення до поля, дістати звідти вказівник на метод/структуру і викликати його як call". Логіку вибору типів краще тримати якомога далі від генератора коду.
+Рекомендація
+Якщо ваш компілятор ще не має окремої фази десахаризації, найпростіше й найпрактичніше — вирішити це всередині семантичного аналізу. Щойно виявлено, що x — це callable-змінна, перемкніть тип вузла або згенеруйте еквівалентний метод-виклик перед тим, як віддавати дерева далі. Це збереже кодову базу простою.
+
+User prompt: Як правильно поширювати mutability, якщо member function викликає callable-поле, наприклад counter(), і його call змінює receiver? Які випадки треба перевірити для mut/const поля та для const об’єкта?
+Response: Поширення мутабельності (mutability propagation) у мовах із підтримкою методу call та полями-структурами — це критично важлива частина семантичного аналізу. Головне правило тут звучить так: не можна викликати мутуючий метод (або звертатися до мутуючих полів) через немутабельний (const) контекст.
+Ось детальний розбір випадків, які обов'язково треба перевірити під час type checking для об'єктів, полів та методів.
+1. Мутабельність самого об'єкта (Variable Mutability)
+У вашому прикладі є два варіанти оголошення:
+Scale triple{3} (незмінний об'єкт)
+Counter mut c{0} (змінний об'єкт)
+Що перевірити:
+Якщо об'єкт оголошено без mut, а його метод call (або метод усередині його полів) намагається змінити стан (тобто містить присвоєння на кшталт n := n + 1), компілятор повинен видати помилку компіляції.
+Приклад помилки:
+Counter c{0};
+c(); // ПОМИЛКА: не можна викликати мутуючий метод для незмінного (immutable) об'єкта 'c'.
+
+
+Якщо об'єкт оголошено з mut (як Counter mut c{0}), виклик дозволено, оскільки шлях до об'єкта є мутабельним.
+2. Мутабельність полів усередині структури (Field Mutability)
+Усередині структур поля можуть бути як звичайними, так і з ключовим словом mut (як i32 mut n у Counter).
+Що перевірити:
+Якщо батьківський об'єкт є незмінним (Counter c{0}), то жодне його поле не може бути змінене, навіть якщо всередині структури воно позначене як i32 mut n. Незмінність об'єкта «заражає» всі його поля (constness propagates downwards).
+Якщо батьківський об'єкт мутабельний (Counter mut c{0}), то поля, позначені як mut, дозволено змінювати всередині методу call.
+3. Контекст методу, що викликає (Method Receiver Mutability / self or this)
+Уявіть ситуацію, де якась структура Shape має у собі лічильник (Counter як поле) і хоче викликати його всередині свого звичайного методу.
+Що перевірити:
+Якщо метод структури не позначений як мутуючий (тобто він працює тільки на читання), він не має права викликати методи або змінювати поля, які виконують мутацію.
+Приклад:
+struct Shape
+{
+    Counter mut counter_field
+
+    // Якщо цей метод не мутуючий:
+    fn invalid_method := () -> i32
+    {
+        // ПОМИЛКА: не можна викликати мутуючий метод c() з немутабельного контексту методу grown/invalid_method
+        exit counter_field() 
     }
 }
 
 
-Крок 2: Перевірка самого виклику методу (analyze_member_call)
-Коли аналізатор бачить вузол MemberCall { target, method_name, args } (де target — це c.center, а method_name — shift):
-fn analyze_member_call(call: &MemberCall, env: &SymbolTable) {
-    // 1. Отримуємо тип цільового об'єкта та чи є ВСЕ посилання до нього mut
-    let (target_type, is_chain_mut) = check_path_mutability(&call.target, env);
+Щоб метод міг викликати мутуючі виклики (як counter_field()), сам метод або поточний об'єкт (self/this) усередині цього методу повинен мати дозвіл на мутацію (у багатьох мовах це позначається як fn name := mut () -> i32 або подібним чином, залежно від дизайну вашої мови).
+4. Вкладені виклики та ланцюжки (Nested Calls, на кшталт s.scale(7) чи вкладених об'єктів)
+Якщо у вас є складна структура, де об'єкт містить інший об'єкт, який містить метод call:
+Що перевірити:
+Правило транзитивності мутабельності: Мутабельність поширюється ззовні всередину.
+Якщо об'єкт s оголошено як mut s, то його поля (навіть якщо вони самі по собі не мають окремого слова mut на рівні оголошення типу, але містять мутуючі методи) спадково отримують право на виклик мутуючих операцій.
+Якщо s — незмінний (Shape s{...}), то виклик s.counter_field() на запуск мутації має бути заблокований компілятором.
+Водночас, незмінні поля (як Scale scale у Shape, де Scale не має мутацій у своєму call) можна викликати навіть на незмінних об'єктах, бо вони нічого не змінюють (як s.scale(7) у вашому завданні).
+Чек-лист для реалізації у Type Checker:
+Визначити «змогу змінювати» (Is Mutable Flag): Кожне виразне дерево (AST expression), що є результатом розбору змінної чи поля (L-value), повинно нести інформацію про те, чи є воно мутабельним (is_mut = true/false).
+Перевірка при виклику FnCall / MethodCall:
+Коли компілятор бачить виклик (наприклад, c()), він дивиться на тип об'єкта c.
+Перевіряє метод call цього типу: чи модифікує цей метод свої поля (чи є в ньому операції присвоєння з mut-полями).
+Якщо метод модифікує, але сама змінна/поле c не має mut, кидати помилку: "Cannot call mutating method on immutable variable/field".
 
-    // 2. Знаходимо оголошення методу в структурі
-    let struct_def = env.lookup_struct(&target_type);
-    let method_info = struct_def.find_method(&call.method_name);
+User prompt: поясни мені знову як це кол структури має працювати: } } struct Shape { Scale scale i32 side fn grown := () -> i32 { i32 g{scale(side)} exit g } } Scale triple{3} Counter mut c{0} Shape s{{2}, 5} print(triple(14)) print(triple.call(14)) print(s.scale(7)) print(s.grown()) i32 a{c()} i32 b{c()} print(c) i32 r{a * 10 + b} exit r Expected output: 42 42 14 10 Counter{n: 2} Program exit with result 12 scale is a field of Shape, so s.scale(7) is s.scale.call(7); inside grown, scale(side) calls the field of its own object. The call of Counter changes n, so it is a mutating member function and the mutation rule holds as for any other: with Counter c{0} the call c() is an error. The call rule. For a name followed by (: 1. If the name is a variable visible here (a parameter, a local, a field inside a member function, a capture inside a lambda), its type must be a struct that declares call. The call is name.call(args). 2. Otherwise the name is a function, found as before: a member function of the current struct, then a global function. 3. Otherwise it is an unknown function. 1 If the name is both a visible variable and a function, the call is an error at the name: 'twice' is both a variable and a function: rename one of them. Declaring both is allowed; only a call twice(…) is refused. The same rule works after a dot: in obj.name(args), if name is a field of obj, the call is obj.name.call(args). The rewrite. The parser cannot tell a variable from a function: triple(14) is a Call in --ast. The semantic pass knows the names, so it makes the decision there and puts a member call in place of the call: the target triple, the member function call, the same arguments. That member call is checked by the code that already checks member calls (the arguments, the mutation rule), and code generation does not change. The IR of triple(14) and of triple.call(14) is the same line: %"call.ret" = call i32 @"Scale_call"(%"Scale"* %"triple", i32 14) Errors. Each one with line:column; the wording is yours: - a variable whose struct has no call: 'p' is not callable: Point has no member function 'call'; a variable of a built-in type: 'n' is not callable: it is i32; - a name that is both a variable and a function, at the call; - a wrong number or type of arguments (the message names the object, not call); - a mutating call on a const object or through a const field: cannot call 'c': its 'call' changes it, and it is not mut.
+Response: Давайте розберемо це чітко за пунктами з урахуванням офіційних правил із вашого завдання. Тут описано дуже конкретний алгоритм, за яким компілятор розуміє, що саме викливається, коли бачить круглі дужки (...).
+Головне правило виклику (The call rule)
+Коли компілятор бачить ім'я, за яким одразу йдуть круглі дужки з аргументами (наприклад, triple(14) або scale(side)), він виконує перевірку в 3 кроки:
+Крок 1. Перевірка на видиму змінну або поле
+Компільтор перевіряє, чи є це ім'я змінною (локальною змінною, параметром, полем поточного об'єкта тощо).
+Якщо це змінна, то її тип обов'язково повинен бути структурою, яка має метод call.
+Якщо умова виконується, цей виклик автоматично переписується у виклик методу: triple(14) стає triple.call(14) scale(7) (коли scale — поле Shape) стає scale.call(7)
+Крок 2. Перевірка на звичайну функцію
+Якщо ім'я не є змінною, компілятор шукає його як звичайну функцію (спочатку серед методів поточного об'єкта, потім серед глобальних функцій).
+Крок 3. Невідома функція
+Якщо ім'я не знайдено ніде — це помилка («невідома функція»).
+Як це працює на прикладах із вашого коду:
+print(triple(14)) та print(triple.call(14))
+triple — це змінна типу Scale. У Scale є метод call.
+Згідно з Кроком 1, triple(14) автоматично перетворюється на triple.call(14). Тому обидва рядки дають однаковий результат: 42.
+print(s.scale(7))
+s — це об'єкт Shape. У нього є поле scale (яке має тип Scale).
+Завдяки правилу для крапки (obj.name(args)), якщо name є полем об'єкта, це автоматично стає s.scale.call(7).
+Оскільки Scale із параметром 2 множиться на 7, виходить 14.
+Усередині методу grown у Shape:
+fn grown := () -> i32
+{
+    i32 g{scale(side)}
+    exit g
+}
 
-    // 3. ПЕРЕВІРКА МУТАБЕЛЬНОСТІ:
-    if method_info.is_mutating && !is_chain_mut {
-        semantic_error(
-            call.line, call.col,
-            format!(
-                "Cannot call mutating method '{}' through a const path/link", 
-                call.method_name
-            )
-        );
+
+Коли компілятор бачить всередині методу scale(side), він шукає scale. Спочатку перевіряє Крок 1 (чи є scale змінною / полем поточного об'єкта).
+Оскільки scale — це поле структури Shape, а його тип (Scale) є callable, компілятор застосовує правило 1 і перетворює це на scale.call(side).
+Про лічильник (Counter):
+Counter mut c{0}
+i32 a{c()}
+i32 b{c()}
+
+
+c — це змінна типу Counter. Оскільки у Counter є метод call, запис c() розгортається у c.call().
+Метод call у Counter збільшує n на 1 і повертає його. Перший виклик (a) дає 1, другий (b) — 2.
+У результаті a * 10 + b дорівнює 1 * 10 + 2 = 12 (це значення повертає програма у exit r). А стан об'єкта стає Counter{n: 2}.
+Підсумок
+Концепція надзвичайно проста: якщо перед дужками (...) стоїть ім'я змінної або поля, а не звичайна функція, мова автоматично шукає у цієї змінної/поля метод call і викликає його. Для генератора коду (LLVM IR) немає жодної різниці між triple(14) та triple.call(14) — обидва варіанти перетворюються на однаковий низькорівневий виклик функції Scale_call.
+
+User prompt: ааа то це ми просто робимо класи?
+Response: Не зовсім! Це не класи в звичному об'єктно-орієнтованому сенсі (як у Python, Java чи C++), де є спадкування, віртуальні таблиці, конструктори та інше.
+Тут це називається структурами з підтримкою синтаксичного цукру для виклику (callable structs).
+Основна різниця:
+Тут немає спадкування (немає class Dog extends Animal). Є лише дані (struct) і функції, які прив'язані до них через перелік (або викликаються явно).
+call — це просто спеціальна назва методу, яку компілятор навчився розпізнавати, коли ви ставите круглі дужки () біля змінної.
+Тобто це не повноцінна ООП-система, а швидше гарний трюк зі структурою і функцією, щоб звичайну змінну можна було «викликати» як функцію. Але інтуїція у вас правильна — за зручністю використання це дуже схоже на те, як об'єкти поводяться в інших мовах!
+
+User prompt: але є методи всередині обʼєкту що також має поля
+Response: Так, абсолютно! Ви абсолютно правильно зловили суть.
+Наявність полів і методів усередині структури робить їх дуже схожими на об'єкти (або класи) в багатьох інших мовах програмування.
+Але з погляду компілятора та термінології тут є кілька важливих нюансів:
+Це називається структурами (Structs), а не класами. У багатьох мовах (наприклад, C++, Rust, Go) структури теж можуть мати і поля, і методи. Але відмінність від класичного ООП зазвичай у тому, що тут немає складних механізмів на кшталт спадкування чи поліморфізму — це просто контейнер для даних (полів) і функцій (методів), які працюють із цими даними.
+Метод call тут — це просто "фіча" (синтаксичний цукор). Будь-який метод у структурі можна викликати через крапку (обєкт.метод()). Але саме наявність методу з назвою call дозволяє опускати крапку і назву методу, викликаючи об'єкт напряму через круглі дужки (обєкт()).
+Тобто ви абсолютно праві: логіка дуже схожа на об'єктно-орієнтований підхід (структура об'єднує стан і поведінку), просто в цій навчальній мові вона реалізована вкрай мінімалістично й елегантно!
+
+User prompt: що треба зробити в цьому завданні: TASK 2 — LAMBDAS (1.5 POINTS) A lambda is a function declared where a statement stands. The list in brackets names the variables it takes with it, its captures: statement ::= decl | assign | if | while | print | lambda lambda ::= "fn" ident ":=" "[" [ ident { "," ident } ] "]" "(" [ type ident { "," type ident } ] ")" "->" type NL block A lambda stands at the top level among the statements and inside any block: a function, a member function, if, while, another lambda. A line that starts with fn name := [ is a lambda; fn without [ inside a block stays an error, and so does a capture list on a member function. - A capture is a copy taken at the declaration. Changing the variable later does not change the lambda. A lambda declared inside a loop takes the current value on every iteration. Inside the body a capture is const. - The body sees its parameters, its locals, its captures and the global functions. Nothing else: not the toplevel variables, not the locals and parameters of the enclosing function, not the fields of the enclosing struct, unless they are captured. This is the same rule as for a function body, which does not see the top-level variables either. A lambda cannot call itself: its name is declared after its body. A lambda may capture another lambda. fn sq := (i32 v) -> i32 { i32 r{v * v} exit r } fn sum_scaled := (i32 factor, i32 a, i32 b) -> i32 { fn times := [factor](i32 v) -> i32 { i32 r{factor * sq(v)} exit r } i32 s{times(a) + times(b)} exit s } i32 mut k{10} fn add_k := [k](i32 y) -> i32 { i32 r{k + y} exit r } k := 100 print(add_k(5)) print(k) print(sum_scaled(2, 3, 4)) exit add_k(1) Expected output: 15 100 50 Program exit with result 11 add_k keeps the 10 it took at its declaration; times captures the parameter factor and calls the global function sq. The rewrite. A lambda becomes three things the compiler already has: 1. a struct with one field per capture, of the type of the captured variable. The struct has no name in the language; call it lambda.add_k in the compiler: a dot cannot appear in a name a program declares, so it never clashes; 2 2. its member function call with the parameters, the return type and the body of the lambda; 3. a variable add_k of that struct, initialised at this point with the captured values, as lambda.add_k add_k{k}. After that, add_k(5) is a callable object from Task 1. Do the rewrite in the semantic pass: the types of the captures are known only there. --ast stays the parse tree; add the flag --ast-checked, which prints the tree after the semantic pass. A part of it for the program above: Lambda add_k -> i32 Struct lambda.add_k Member k i32 const MemberFn call -> i32 Param y i32 Block ... Decl add_k lambda.add_k const Var k Assign k Const 100 Print CallableCall add_k Const 5 In the IR the struct is a type, call is a member function with the object as its first parameter, and the declaration is an alloca, a gep and a store per capture. A part of output.ll: %"lambda.add_k" = type {i32} define i32 @"lambda.add_k_call"(%"lambda.add_k"* %"this", i32 %"y") ... %"add_k" = alloca %"lambda.add_k" ... %"k.val" = load i32, i32* %"k" %"add_k.0.ptr" = getelementptr inbounds %"lambda.add_k", %"lambda.add_k"* %"add_k", i32 0, i32 0 store i32 %"k.val", i32* %"add_k.0.ptr" store i32 100, i32* %"k" %"call.ret" = call i32 @"lambda.add_k_call"(%"lambda.add_k"* %"add_k", i32 5) k := 100 is a store into k; the copy inside add_k stays 10. The type has no name. So no parameter, return type, variable or field can have it. A lambda cannot be passed as an argument, cannot be the value of exit, cannot initialise a declared variable or a field, cannot be assigned, and cannot be printed. Its captures are not visible outside its body: add_k.k is an error. Errors. Each one with line:column; the wording is yours. The messages of the reference for the program above, with one change each: - an outer name used in the body without a capture ([] instead of [k]): line 19:11: 'k' is not captured by lambda 'add_k': add it to the capture list, [k]; - an assignment to a capture (k := k + y in the body): line 19:5: cannot assign to 'k': the capture 'k' is const, write [mut k]; - a name captured twice ([k, k]): line 17:17: 'k' is captured twice; - a name in the capture list that is not visible ([factor, k] in sum_scaled): line 8:26: cannot capture 'k': no variable 'k' is visible here; - a lambda passed as an argument (sq(times)): line 13:14: 'times' is a lambda and cannot be passed to 'sq': its type has no name, so no parameter can have it; - a lambda as the value of exit, in a declaration of a named type, in an assignment, in print; a parameter named like a capture; a lambda calling itself.
+Response: У цьому завданні вам потрібно реалізувати підтримку лямбда-функцій (closures) у вашому компіляторі.
+Головна ідея завдання зводиться до десахаризації (desugaring): ви повинні перетворити лямбду на те, що ваш компілятор вже вміє обробляти (а саме — на структуру з методом call із Завдання 1).
+Що конкретно треба зробити:
+1. Парсинг лямбди
+Оновіть синтаксичний аналізатор (парсер), щоб він розпізнавав синтаксис лямбди: fn name := [captures] (params) -> type { body } (Або безіменні лямбди, якщо вони привласнюються змінній, але тут синтаксис завжди має ім'я: fn name := [...] (...) -> ...).
+2. Трансформація в семантичному проході (The Rewrite)
+Оскільки під час парсингу типів ще не видно, весь перепис робиться в семантичному аналізаторі. Кожну лямбду компілятор повинен перетворити на три речі:
+Анонімну структуру (struct), яка має по одному полю для кожної змінної, що захоплена (captured). Цю структуру можна назвуть внутрішнім ім'ям типу, наприклад lambda.add_k.
+Метод call цієї структури, куди переноситься тіло лямбди та її параметри. Першим прихованим параметром туди передається this (вказівник на саму структуру), а захоплені змінні стають полями.
+Звичайну змінну (об'єкт цієї структури) на місці оголошення лямбди, яка ініціалізується поточними значеннями захоплених змінних (наприклад, lambda.add_k add_k{k}).
+Після цього кроку лямбда стає звичайним виклиτώваним об'єктом (Callable Object), і генератор коду (Codegen) взагалі не потрібно змінювати!
+3. Реалізація семантичних правил та перевірок (Semantic Checks)
+Вам потрібно перевірити такі правила для лямбд:
+Захоплення (Captures): Лямбда бачить лише свої параметри, локальні змінні, глобальні функції та змінні зі списку захоплення ([...]). Усе інше (змінні з навколишньої функції чи поля структури) невидиме, доки не буде захоплене. Якщо в тілі використовується змінна, яка не в списку, — помилка.
+Неконмкованість / Constness: Усі захоплені змінні всередині тіла лямбди є незмінними (const). Якщо спробувати їх змінити (наприклад, k := k + 1), компілятор має видати помилку (якщо немає підтримки mut у захваті).
+Унікальність захвату: Заборонено захоплювати одну й ту саму змінну двічі в списку (наприклад, [k, k]).
+Видимість захвату: Змінна, яку намагаються захопити, обов'язково має бути видимою в цьому місці.
+Обмеження анонімного типу: Оскільки тип лямбди не має імені в мові користувача, її не можна передавати як аргумент у функції, повертати через exit, присвоювати чи друкувати (print).
+4. Додаткові вимоги до виводу
+Додати новий флаг командного рядка --ast-checked, який виводить AST після проходження семантичного аналізу (де лямбди вже переписані на структури).
+Обробити всі специфічні помилки з точним зазначенням рядка й стовпчика (line:column) та адекватними повідомленнями (приклади наведені в умові).
+
+User prompt: нагадай що таке лямбда
+Response: Лямбда-функція (або просто лямбда) — це анонімна функція (функція без імені), яку можна оголосити прямо всередині коду в будь-якому місці, де зазвичай стоїть звичайний вираз чи інструкція.
+У контексті вашого завдання лямбда виконує дві дуже круті функції:
+Кодується на льоту прямо всередині іншої функції чи блоку коду.
+«Захоплює» (captures) змінні з навколишнього середовища (зовнішньої функції), які їй потрібні для роботи.
+Простий життєвий приклад (на базі вашого завдання):
+Уявіть, що у вас є звичайна функція sum_scaled, і всередині неї вам на короткий час потрібна ще одна маленька допоміжна функція times, яка використовує змінну factor з навколишньої функції:
+fn sum_scaled := (i32 factor, i32 a, i32 b) -> i32
+{
+    // Оце і є лямбда! Вона «захоплює» змінну factor у квадратних дужках [factor]
+    fn times := [factor](i32 v) -> i32
+    {
+        i32 r{factor * sq(v)}
+        exit r
     }
-
-    // 4. Перевірка типів та кількості аргументів...
+    
+    i32 s{times(a) + times(b)}
+    exit s
 }
 
 
-3. Як виявити, які методи є mutating (Fixed-Point Iteration)
-Оскільки методи можуть викликати один одного циклами (наприклад, fn A викликає fn B, а fn B викликає fn A), ви не можете визначити мутабельність за один прохід AST.
-Використовується алгоритм непорушної точки (Fixed-Point Iteration):
-[ Крок 1: Прямі присвоєння ]
-Пройти по тілу кожного методу у структурі.
-Якщо метод містить `x := ...` (де `x` — поле структури):
-    позначити method.is_mutating = true
+Головні особливості лямбд у вашому завданні:
+Квадратні дужки [...] — це список захоплення (captures). У них ви явно перераховуєте змінні ззовні, які лямбда має "забрати з собою" (наприклад, [factor] або [k]).
+Знімок під час оголошення (Copy on capture): Лямбда робить копію захопленої змінної в момент створення. Якщо ви зміните зовнішню змінну пізніше (k := 100), то всередині лямбди значення залишиться старим (наприклад, 10), якщо тільки вона не була захоплена особливим чином.
+Недоступність типу: Оскільки лямбда створює "безіменну" структуру «під капотом», її не можна передавати в інші функції як звичайний параметр, повертати через exit чи виводити на екран через print. Вона живе виключно там, де створена, і слугує зручним «callable-об'єктом» (як ми розглядали в Завданні 1).
 
-[ Крок 2: Розповсюдження прапорця (Цикл) ]
-repeat:
-    changed = false
-    for each struct in program:
-        for each method in struct:
-            if method.is_mutating == true:
-                continue // Вже мутуючий, пропускаємо
-
-            // Перевіряємо всі виклики методів всередині тіла цього методу
-            for each call in method.body:
-                if call is member_call on same object (or its field):
-                    target_method = find_method(call)
-                    if target_method.is_mutating:
-                        method.is_mutating = true
-                        changed = true
-until changed == false
+User prompt: а як ми будемо класти сам параметр назви функції чи посилання на неї всередину іншої
+Response: Питання дуже слушне! Але секрет цього завдання полягає в одному важливому обмеженні мови, яке описане в умові:
+A lambda cannot be passed as an argument... its type has no name, so no parameter can have it.
+Тобто ми не можемо передати саму лямбду як параметр у звичайну функцію.
+Коли ми дивимося на код на кшталт такого:
+fn sum_scaled := (i32 factor, i32 a, i32 b) -> i32
+{
+    fn times := [factor](i32 v) -> i32
+    {
+        i32 r{factor * sq(v)}
+        exit r
+    }
+    i32 s{times(a) + times(b)}
+    exit s
+}
 
 
-Важливі нюанси під час визначення is_mutating:
-Локальні змінні «перекривають» поля: Якщо у методі написано i32 x{10}; x := 5;, і x є локальною змінною/параметром, це НЕ робить метод mutating. Метод мутуючий тільки тоді, коли відбувається присвоєння полю структури.
-Присвоєння не-мутабельному полю: Якщо всередині методу робиться x := ..., але поле x оголошено без mut, аналізатор одразу видає помилку: an assignment to a const field inside a member function.
-4. Приклади роботи на ваших даних
-Розглянемо вираз з вашого завдання:
-Circle mut c{q, 2}
-i32 e{c.center.shift(1)}
-
-
-Аналізатор бачить виклик c.center.shift(1).
-Викликає check_path_mutability для c.center:
-Перевіряє c: оголошено як Circle mut c → is_mut = true.
-Перевіряє поле center у структурі Circle: в оголошенні Point center немає ключового слова mut → field.is_mutable = false.
-Комбінує: true && false → is_chain_mut = false.
-Перевіряє метод shift:
-В алгоритмі Fixed-Point метод shift отримав is_mutating = true (бо містить x := x + dx).
-Фінальне порівняння:
-Метод shift вимагає mutating, але is_chain_mut дорівнює false.
-Результат: Видається помилка: a mutating call through a const link (на слові center).
-
-User prompt: Як згенерувати код для універсального виведення структури (print(c)), якщо тип структури відомий на етапі компіляції? Як автоматично пройтися по таблиці полів структури в LLVM IR, зробити gep для кожного поля, завантажити його значення та викликати відповідний формат (%d, %lld, %s, або рекурсивно вивести вкладену структуру)?
-Response: Для автоматичної генерації коду універсального виводу (print(c)) у компіляторі, коли тип структури відомий на етапі компіляції, використовують підхід структурної рефлексії на етапі компіляції (Compile-time Type Reflection).
-Оскільки низькорівневий LLVM IR сам по собі «не знає» назв полів і типів високого рівня, вся логіка генерації коду має відбуватися у вашому компіляторі (на етапі CodeGen) під час обходу AST/Таблиці типів, а не в самому LLVM IR.
-Основний алгоритм генерації (CodeGen Strategy)
-Коли генератор коду зустрічає виклик print(c), де c має тип Circle:
-Отримати метадані типу: Компілятор бере з таблиці типів (Symbol Table / Type Registry) інформацію про структуру Circle: перелік її полів, їхні типи та порядок (індекси).
-Створити рекурсивну функцію генерації: Компілятор генерує послідовність інструкцій GEP (GetElementPointer) + Load + Call print для кожного поля по черзі.
-Оформити гарний вивід: Додати символи розделителів (наприклад, Circle { center: , , , }), щоб результат був читабельним.
-Схема обходу полів у компіляторі (Псевдокод CodeGen)
-Нижче наведено приклад того, як має виглядати метод generate_struct_print у вашому генераторі коду (на C++/Rust/Python, яким написано ваш компілятор):
-fn generate_print_expr(builder: &mut IRBuilder, expr: &Expr, symbol_table: &SymbolTable) {
-    let val_type = expr.get_type();
-
-    match val_type {
-        Type::I32 => {
-            let val = generate_code(expr);
-            builder.build_call(printf_func, &[string_fmt("%d"), val]);
-        }
-        Type::Struct(struct_name) => {
-            // Отримуємо адресу структури в пам'яті (alloca або pointer)
-            let struct_ptr = generate_lvalue_address(expr); 
-            let struct_def = symbol_table.lookup_struct(&struct_name);
-
-            // 1. Друкуємо назву структури та відкриваючу дужку
-            builder.build_call(printf_func, &[string_fmt(&format!("{} {{ ", struct_name))]);
-
-            // 2. Ітеруємося по всіх полях структури за їхніми індексами (0, 1, 2...)
-            for (index, field) in struct_def.fields.iter().enumerate() {
-                if index > 0 {
-                    builder.build_call(printf_func, &[string_fmt(", ")]);
-                }
-
-                // Друкуємо назву поля
-                builder.build_call(printf_func, &[string_fmt(&format!("{}: ", field.name))]);
-
-                // 3. Обчислюємо адресу i-го поля за допомогою GEP
-                // [0, index] -> 0 для розархівації вказівника, index для поля
-                let field_ptr = builder.build_gep(
-                    struct_def.llvm_type, 
-                    struct_ptr, 
-                    &[i32_const(0), i32_const(index)]
-                );
-
-                // 4. РЕКУРСІЯ: Якщо поле є базовим типом -> Load і printf
-                //             Якщо поле є іншою структурою -> Рекурсивний виклик!
-                if field.type.is_struct() {
-                    // Передаємо field_ptr як адресу вкладеної структури
-                    generate_print_struct_by_ptr(builder, field_ptr, &field.type, symbol_table);
-                } else {
-                    let field_val = builder.build_load(field.llvm_type, field_ptr);
-                    generate_print_primitive(builder, field_val, &field.type);
-                }
-            }
-
-            // 5. Друкуємо закриваючу дужку
-            builder.build_call(printf_func, &[string_fmt(" }")]);
-        }
+times не передається кудись усередину іншої функції як аргумент. Лямбда times оголошується всередині локального блоку функції sum_scaled, отримує локальне ім'я times (як звичайна змінна-об'єкт) і викликається прямо на місці (times(a) та times(b)), оскільки вона видима у цьому блоці коду.
+Як це виглядає «під капотом» завдяки десахаризації?
+Оскільки лямбда перетворюється на структуру з методом call (із Завдання 1), компілятор робить із неї звичайнісіньку локальну змінну-об'єкт.
+Для нашого прикладу з times компілятор створить під капотом приблизно такий код:
+Анонімну структуру:
+struct lambda.times
+{
+    i32 factor // поля для захвату
+    fn call := (i32 v) -> i32
+    {
+        i32 r{factor * sq(v)}
+        exit r
     }
 }
 
 
-Приклад результату в LLVM IR
-Якщо у вас є структури з вашого завдання:
-struct Point { i32 mut x, i32 mut y }
-struct Circle { Point center, i32 radius }
+Створення екземпляра (змінної) у момент оголошення лямбди:
+// Замість fn times := [factor](...) компілятор ставить:
+lambda.times times{factor} 
 
 
-І ви викликаєте print(c) для об'єкта Circle c, ваш компілятор має згенерувати наступний LLVM IR:
-; Строкові константи для форматування (оголошуються в глобальній області)
-@str_circle_open = private unnamed_addr constant [11 x i8] c"Circle { \00"
-@str_center_label = private unnamed_addr constant [10 x i8] c"center: \00"
-@str_point_open = private unnamed_addr constant [10 x i8] c"Point { \00"
-@str_x_label = private unnamed_addr constant [4 x i8] c"x: \00"
-@str_fmt_i32 = private unnamed_addr constant [3 x i8] c"%d\00"
-@str_comma = private unnamed_addr constant [3 x i8] c", \00"
-@str_y_label = private unnamed_addr constant [4 x i8] c"y: \00"
-@str_radius_label = private unnamed_addr constant [10 x i8] c"radius: \00"
-@str_close_br = private unnamed_addr constant [4 x i8] c" }\00"
+Виклик (як у Завданні 1): Коли ми пишемо times(a), компілятор за правилом Завдання 1 бачить, що times — це змінна, яка має метод call, і переписує це у звичайнісінький виклик методу:
+times.call(a)
 
-declare i32 @printf(i8*, ...)
 
-define void @print_circle(%Circle* %c_ptr) {
-entry:
-  ; 1. Друк "Circle { "
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @str_circle_open, i32 0, i32 0))
+Тобто жодної магії передачі функцій-вказівників (як у C чи JavaScript) тут немає. Лямбда — це просто автоматично згенерована структура зі збереженим станом (полями захвату) та методом call, яка створюється як локальна змінна.
 
-  ; --- ПОЛЕ 0: center (Вкладена структура Point) ---
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_center_label, i32 0, i32 0))
-  
-  ; GEP для вкладеної структури (Index 0 в Circle): %Point* %center_ptr
-  %center_ptr = getelementptr inbounds %Circle, %Circle* %c_ptr, i32 0, i32 0
-
-  ; --- РЕКУРСИВНИЙ ВИВІД Point ---
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_point_open, i32 0, i32 0))
-  
-  ; Point.x (Index 0 в Point)
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_x_label, i32 0, i32 0))
-  %x_ptr = getelementptr inbounds %Point, %Point* %center_ptr, i32 0, i32 0
-  %x_val = load i32, i32* %x_ptr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %x_val)
-  
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_comma, i32 0, i32 0))
-
-  ; Point.y (Index 1 в Point)
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_y_label, i32 0, i32 0))
-  %y_ptr = getelementptr inbounds %Point, %Point* %center_ptr, i32 0, i32 1
-  %y_val = load i32, i32* %y_ptr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %y_val)
-
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_close_br, i32 0, i32 0))
-  ; --- КІНЕЦЬ Point ---
-
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_comma, i32 0, i32 0))
-
-  ; --- ПОЛЕ 1: radius (i32) ---
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_radius_label, i32 0, i32 0))
-  %radius_ptr = getelementptr inbounds %Circle, %Circle* %c_ptr, i32 0, i32 1
-  %radius_val = load i32, i32* %radius_ptr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %radius_val)
-
-  ; Закриваємо Circle
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_close_br, i32 0, i32 0))
-
-  ret void
+User prompt: а як ми знаємо що викликати якщо вона ніяк не називається і в нас. лише параметри
+Response: А отут ховається найцікавіший момент! Ви абсолютно праві, що помітили це.
+У цій мові є двозначність у термінах: сама лямбда (як змінна) має ім'я, але її тип — безіменний.
+Давайте подивимося на синтаксис із завдання:
+fn add_k := [k](i32 y) -> i32
+{
+    i32 r{k + y}
+    exit r
 }
 
 
-Два варіанти організації коду (Оптимізація)
-Inline Expansion (Вбудовування прямо у місці виклику):
-Ви розгортаєте увесь цей код з printf безпосередньо туди, де написано print(c).
-Плюси: Дуже просто реалізувати в генераторі коду.
-Мінуси: Роздуває розмір підсумкового бінарника (Code bloat), якщо print(c) викликається у багатьох місцях.
-Helper Function Generation (Генерація окремої функції під тип):
-Для кожної структури T компілятор автоматично генерує допоміжну функцію void print_T(T* ptr).
-При зустрічі print(c) компілятор просто генерує виклик call void @print_Circle(%Circle* %c).
-Плюси: Компактний IR-код, чистота та перевикористання.
+Тут чітко написано: fn add_k. Тобто add_k — це ім'я змінної, в якій живе наша лямбда.
+Чому кажуть, що вона «без імені» (анонімна)?
+У термінології програмування лямбду називають анонімною, тому що у неї немає глобального імені типу (як у звичайних структур struct Counter чи struct Scale). Ви не можете написати в коді програми десь в іншому місці:
+// ТАК НЕ МОЖНА:
+lambda.add_k another_variable; // Помилка, бо тип не має імені для програміста
 
 
-1. Що користувач попросив зробити:
-   - Розпочати Практику 7 (Member functions in structs).
-   - Фіксувати у цьому файлі (ai_usage.txt) після кожної генерації коду: що користувач попросив, що було зроблено, та що користувач відкинув / не взяв у код.
-   - Створити набір тестів:
-     * 12 негативних тестів (N1–N12) згідно з таблицею помилок (fn перед полем, поле після fn, конфлікти імен, виклик без дужок, standalone call, виклик від імені типу, продовження ланцюжка після дужок, неіснуюча функція, невідповідність кількості аргументів, виклик на примітивному типі, невідоме поле в ланцюжку).
-     * 8 позитивних тестів (P1–P8) згідно з таблицею успішних сценаріїв (базовий виклик, мутація полів з аргументом, ланцюжок полів c.center.d2(), виклик як фактор у виразі, виклик у exit, вкладені виклики аргументів, робота з копією об'єкта, повний приклад з умови на 83).
-   - Скоригувати граматику (grammar.ebnf) відповідно до вимог завдання Практики 7:
-     * struct_def ::= "struct" ident NL "{" NL field_decl { field_decl } { fn_decl } "}" NL
-     * додати правило member_call
-     * додати member_call до factor/operand
-     * зберегти існуючі назви сутностей та не робити зайвих правок/перейменувань.
-   - Сам код компілятора (compiler.py) на цьому кроці поки що не змінювати/не виконувати.
+У програміста немає ключового слова чи назви класу, щоб оголосити іншу таку саму структуру. Цей тип існує лише в єдиному екземплярі для цієї конкретної лямбди.
+Як компілятор усе це розрулює:
+Коли компілятор бачить цей рядок, він робить дві речі водночас:
+Створює унікальний тип під капотом (дає йому внутрішнє ім'я, наприклад, lambda.add_k). Програміст його не бачить і не може використати, але компілятор його знає.
+Створює звичайну локальну змінну з тим ім'ям, яке ви написали (add_k), і записує туди цей новостворений об'єкт.
+Тобто для компілятора ваш код із лямбдою перетворюється на ось таку конструкцію:
+// 1. Компілятор сам створює структуру (її тип не має імені для користувача)
+struct lambda.add_k 
+{
+    i32 k // поле для захопленої змінної
+    fn call := (i32 y) -> i32
+    {
+        i32 r{k + y}
+        exit r
+    }
+}
 
-2. Що було зроблено:
-   - Оновлено grammar.ebnf:
-     * Правило `struct_def` оновлено з урахуванням обов'язкових полів спочатку та необов'язкових методів після них: `field_decl { field_decl } { fn_decl }`.
-     * Додано правило: `member_call ::= ident { "." ident } "." ident "(" [ arg_list ] ")"`.
-     * Додано `member_call` до правила `operand` перед `fn_call`, що автоматично робить його частиною `factor`.
-   - Створено 12 негативних тестів у tests/err/ (разом із .expected файлами з точними очікуваними повідомленнями про синтаксичні або семантичні помилки):
-     * tests/err/struct_fn_before_field.txt (N1: fn перед першим полем)
-     * tests/err/struct_field_after_fn.txt (N2: поле після fn)
-     * tests/err/struct_fn_conflict_field.txt (N3: однакове ім'я поля та функції)
-     * tests/err/struct_duplicate_fn.txt (N4: дві функції з однаковим ім'ям)
-     * tests/err/struct_call_no_parens.txt (N5: звернення без дужок)
-     * tests/err/struct_standalone_call.txt (N6: виклик як окремий statement)
-     * tests/err/struct_call_on_type.txt (N7: виклик від імені типу структури)
-     * tests/err/struct_call_chain_after_paren.txt (N8: продовження доступу після закриваючої дужки)
-     * tests/err/struct_call_unknown_fn.txt (N9: виклик неіснуючої функції структури)
-     * tests/err/struct_call_arg_count.txt (N10: невідповідна кількість аргументів)
-     * tests/err/struct_call_primitive.txt (N11: виклик методу на не-структурному типі i32)
-     * tests/err/struct_call_chain_unknown_field.txt (N12: невідоме поле у ланцюжку виклику)
-   - Створено 8 позитивних тестів у tests/ok/ (разом із .expected файлами):
-     * tests/ok/struct_fn_basic.txt (P1: базовий виклик без аргументів, результат 25)
-     * tests/ok/struct_fn_mutate.txt (P2: виклик з аргументом та зміною поля, результат 10)
-     * tests/ok/struct_fn_chain.txt (P3: виклик через ланцюжок c.center.d2(), результат 25)
-     * tests/ok/struct_fn_expr.txt (P4: комбінація викликів у складному виразі, результат 49)
-     * tests/ok/struct_fn_exit.txt (P5: виклик безпосередньо в exit, результат 25)
-     * tests/ok/struct_fn_nested_call.txt (P6: виклик іншого методу як аргумент p.shift(p.d2()), результат 6)
-     * tests/ok/struct_fn_copy.txt (P7: перевірка копіювання значень та мутації оригіналу, результат 16)
-     * tests/ok/struct_fn_spec.txt (P8: комплексний приклад з опису завдання, результат 83)
+// 2. Компілятор створює змінну з тим ім'ям, що ви дали у лямбді
+lambda.add_k add_k{k}; 
 
-3. Що користувач відкинув / не взяв у код:
-   - Відкинуто окреме проміжне правило `operand`: користувач вказав спростити та об'єднати його безпосередньо у `factor`, щоб не плутатись.
-   - Відкинуто перейменування `fn_call` на `call`: збережено існуючу назву `fn_call`.
 
-4. Уточнення граматики:
-   - Об'єднано `factor` в один вираз згідно з інструкцією користувача:
-     `factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor`
-   - Правило `operand` видалено як зайве, `fn_call` збережено без змін.
+Що відбувається, коли ви пишете add_k(5)?
+Коли ви викликаєте add_k(5), спрацьовує Завдання 1:
+Компільтор дивиться на ім'я add_k.
+Бачить, що це змінна (а не функція).
+Перевіряє її тип (це згенерована структура lambda.add_k).
+Бачить, що у цієї структури є метод call.
+Спокійно переписує це у звичайнісінький виклик методу: add_k.call(5).
+Висновок: Лямбда має ім'я як змінна (ви можете звертатися до неї, передавати в інші блоки або викликати за цим ім'ям у межах її видимості), але вона не має імені як тип даних, тому її не можна кудись передати чи оголосити її тип явно.
 
-================================================================================
-5. Нова сесія: Реалізація лексингу, парсингу, семантики та кодогенерації member functions
-================================================================================
+User prompt: Лямбда у мене спочатку просто вузол в AST, а потім у семантичному проході перетворюється на структуру з методом call. Норм так робити чи краще винести в окремий прохід зниження (lowering) після перевірки типів? Які мінуси/плюси для парсера, тайпчекера і кодогенерації?
+Response: Це абсолютно нормально і є класичним підходом для таких компіляторів. По суті, те, що ви описуєте, — це класичний патерн desugaring (зниження або десахаризації) безпосередньо всередині семантичного аналізатора.
+Давайте детально розберемо плюси й мінуси такого підходу (коли ви все робите всередині семантичного проходу) порівняно з винесенням в окремий прохід після перевірки типів.
+Варіант А: Перетворення лямбди прямо під час семантичного аналізу (ваш підхід)
+Коли тайпчекер зустрічає вузол лямбди в AST:
+Валідує захвати (captures), перевіряє їх наявність та const-модифікацію.
+«На льоту» генерує всередині таблиці символів новий неіменований тип структури (lambda.name).
+Замінює вузол лямбди в AST на три вузли (або впроваджує згенеровану структуру, метод call та ініціалізацію змінної).
+👍 Плюси:
+Все за один прохід (One-pass / Single-phase semantics): Вам не потрібно бігати по AST двічі (окремо на перевірку, окремо на перетворення). Коли тайпчекер закінчив роботу, AST вже повністю «очищений» від лямбд і готовий до кодогенерації.
+Зручність резолюції імен (Name Resolution): Під час перевірки лямбди вам треба переконатися, що захоплені змінні реально існують у поточній області видимості (scope). У тайпчекера вже є вся інформація про поточніスコпи (scopes) і таблицю символів. Якщо робити це в окремому проході пізніше, вам довелося б заново будувати або зберігати контекст видимості для кожної лямбди, що ускладнює код.
+👎 Мінуси:
+Ускладнення самого тайпчекера: Ваша функція перевірки семантики починає «мутувати» AST замість того, щоб просто читати його і збирати помилки. Код семантичного аналізу стає більш роздутим і менш чистим (змішуються обов'язки аналізу та перебудови дерева).
+Варіант Б: Окремий прохід десахаризації (Lowering Pass) після Type Checking
+Дві чітко розділені фази:
+Type Checker: Проходить по AST, перевіряє типи, валідує захвати лямбд (переконується, що все законно), але не змінює AST.
+Lowering Pass: Окремий обхід перевіреного дерева, який бере ноди лямбд і фізично розгортає їх у структури та змінні.
+👍 Плюси:
+Чіткий поділ відповідальності (Separation of Concerns): Тайпчекер робить лише одну роботу (перевіряє правила мови). Фаза зниження (Lowering) робить іншу (перетворює високорівневі конструкції на низькорівневі). Такий код легше тестувати і підтримувати.
+Наявність флага --ast-checked стає простішою: Згідно з вашим завданням, вам треба виводити дерево після семантичного проходу (--ast-checked). Якщо ви робите десахаризацію в семантичному проході, то --ast-checked покаже вже розгорнуті структури. Якщо вам потрібно, щоб --ast-checked показував дерево до розгортання лямбд (але вже з перевіреними типами), окремий прохід підходить для цього ідеально.
+👎 Мінуси:
+Дублювання логіки контексту: Нижньому проходу (Lowering) доведеться знову розбиратися, які змінні були захоплені, які типи вони мають, і де їх шукати, оскільки всю цю роботу тайпчекер уже зробив на першому кроці. Це призводить до дублікації коду або необхідності "анотувати" вузли AST купою додаткових даних (metadata), щоб нижній прохід знав, що робити.
+Вплив на тайпчекер і кодогенерацію (Codegen)
+Незалежно від того, де ви зробите це перетворення (в семантиці чи окремим проходом), для кодогенерації наслідки однакові й дуже позитивні:
+Codegen узагалі не знає про лямбди. Коли код доходить до генератора, лямбда вже повністю зникла. Для кодогенератора це звичайна структура, звичайний метод call і звичайна інструкція створення об'єкта (alloca, gep, store), як зазначено в завданні. Це рятує вас від пекла в генераторі коду.
+Що обрати у вашому випадку?
+Оскільки ви робите це завдання самостійно й хочете мінімізувати зайву складність:
+Ваш підхід (робити десахаризацію всередині семантичного проходу) — це прагматичний і найшвидший шлях. Він позбавляє вас від необхідності двічі обходити AST і тягнути за собою контексти видимості змінних у другий прохід.
+Головне — переконайтеся, що ви чітко виконуєте вимогу щодо флагу --ast-checked (щоб він виводив дерево у тому стані, якого вимагає тест, де лямбди вже перетворені на структури, як у прикладі з завдання: Lambda add_k -> i32, Struct lambda.add_k, CallableCall add_k).
 
-5.1. Що користувач попросив:
-   - Продовжити роботу та реалізувати лексинг і парсинг member functions у структурах.
-   - Пояснити попередні рішення.
-   - Зберегти назву fn_call (не перейменовувати).
+User prompt: Я копіюю значення capture у поле closure при оголошенні lambda. Поясни, як це має працювати, коли lambda створюється в циклі, а змінна змінюється на кожній ітерації
+Response: Умова завдання каже про це дуже чітко:
+A capture is a copy taken at the declaration. Changing the variable later does not change the lambda. A lambda declared inside a loop takes the current value on every iteration.
+Давайте розберемося, як це працює на практиці і чому це логічно випливає з десахаризації.
+Що означає «копія при оголошенні»?
+Коли ви оголошуєте лямбду, компілятор створює екземпляр згенерованої структури (наприклад, lambda.my_func) і копіює туди значення змінної в момент створення (у момент виконання рядка, де стоїть лямбда).
+Якщо ви зміните зовнішню змінну пізніше (після створення лямбди), то лямбда цього не помітить, тому що вона тримає власну незалежну копію в полях своєї структури. Це ми бачили в прикладі завдання:
+i32 mut k{10}
+fn add_k := [k](i32 y) -> i32 { ... }
+k := 100 // Змінюємо зовнішню k на 100
+print(add_k(5)) // Але всередині k все ще дорівнює 10!
 
-5.2. Що було зроблено:
 
-   Parser (compiler.py):
-   - parse_struct_def розділено на дві фази:
-       Фаза 1: парсинг полів — зупиняється при fn або }.
-       Фаза 2: парсинг member functions — зупиняється при }.
-   - Додано метод parse_member_fn_decl(known_names) — парсить fn ident := (...) -> type { block }.
-   - Перевіряє конфлікти імен між полями та методами.
-   - parse_operand оновлено: після ident при зустрічі . і далі ident( — будує MemberCallNode
-     (ланцюжок закінчується); при . + ident без ( — будує FieldAccessNode (ланцюжок продовжується).
+А що відбувається, коли лямбда створюється в ЦИКЛІ?
+Уявіть ситуацію, де лямбда оголошується всередині циклу while або for, і на кожній ітерації цикл змінює значення змінної (або створює нову ітерацію зі своїм значенням).
+Оскільки рядок оголошення лямбди виконується на кожній ітерації наново, то й структура на кожній ітерації створюється заново.
+Уявіть такий псевдокод усередині циклу:
+i32 mut i{0}
+while (i < 3) {
+    // Лямбда оголошується тут. Цей рядок виконується на кожній ітерації!
+    fn get_i := [i]() -> i32 { exit i }
+    
+    print(get_i())
+    i := i + 1
+}
 
-   SemanticChecker (compiler.py):
-   - visit_struct_def тепер перевіряє підписи та тіла кожного методу через _check_member_fn_body.
-   - _check_member_fn_body: налаштовує область видимості з полями структури та параметрами методу.
-   - visit_member_call: перевіряє тип ресивера, знаходить метод, перевіряє аргументи.
-     Анотує node.mfn і node.type.
 
-   CodeGenVisitor (compiler.py):
-   - visit_struct_def оголошує IR-функції для кожного методу (self-pointer як перший аргумент)
-     та генерує їхні тіла через _gen_member_fn_body.
-   - _gen_member_fn_body: будує entry block, GEP-покажчики на поля через _field_ptrs,
-     виділяє слоти для параметрів.
-   - visit_member_call: отримує lvalue-покажчик ресивера, передає як перший аргумент виклику.
-   - visit_var, get_lvalue_ptr, visit_assign оновлено для пошуку через _field_ptrs всередині методу.
+Як це працює «під капотом» (через десахаризацію):
+Оскільки оголошення лямбди — це створення структури та виділення пам'яті (alloca), на кожній ітерації циклу відбуваються такі кроки:
+Ітерація 1 (i = 0):
+Виконується рядок оголошення лямбди.
+Створюється новий об'єкт структури (наприклад, lambda.get_i).
+У поле цього об'єкта копіюється поточне значення i (тобто 0).
+get_i() повертає 0.
+Ітерація 2 (i = 1):
+Цикл триває, i змінюється на 1.
+Знову виконується рядок оголошення лямбди.
+Створюється новий, окремий екземпляр структури.
+У його поле копіюється нове поточне значення i (тобто 1).
+get_i() повертає 1.
+Ітерація 3 (i = 2):
+Створюється ще один новий екземпляр структури, куди копіюється 2.
+get_i() повертає 2.
+Висновок для вашого компілятора
+Вам не потрібно писати якусь особливу «магію циклів» для лямбд!
+Оскільки лямбда за визначенням перетворюється на створення змінної-структури в тому місці, де вона написана, то якщо цей рядок стоїть усередині тіла циклу, він просто виконуватиметься щоразу наново.
+Кожна ітерація циклу автоматично створить нову копію структури із актуальним на цей момент значенням захопленої змінної. Це відбувається природним чином завдяки звичайному порядку виконання інструкцій у блоці циклу.
 
-   Тести:
-   - Оновлено .expected файли для 10 тестів (правильні рядок/стовпець та повідомлення).
-   - Всі 98 тестів проходять.
+User prompt: а що треба зробити тут: ADDITIONAL TASK — MUT CAPTURES (+1) [mut n] gives the lambda its own mutable copy of n: the field of the struct is mut. A call that assigns a mut capture is a mutating member function, so the mutation rule decides where it may be called. The closure variable is mut when one of its captures is mut, so a call like next() works at the place of the declaration. A capture of another lambda is const unless it is written [mut next]. The original variable never changes, and a mut capture of a const variable is allowed: it is a copy. i32 n{0} fn next := [mut n]() -> i32 { n := n + 1 exit n } print(next()) print(next()) fn twice := [mut next]() -> i32 { i32 a{next()} i32 b{next()} i32 r{a * 10 + b} exit r } print(twice()) print(next()) exit n Expected output: 1 2 34 3 Program exit with result 0 twice takes a copy of next whose counter is 2 and counts on that copy; the original next goes on from 2; n is still 0. With [next] instead of [mut next] the copy is const, and the call inside twice is an error: line 11:11: cannot call 'next': its 'call' changes it, and it is not mut. Add tests: a counter, a mut capture changed in a loop, two lambdas with their own copies of one variable, a const and a mut capture in one list, and the error above. SUBMISSION Push the compiler, tests/
+Response: У цьому додатковому завданні йдеться про мутабельні захвати (mut captures) у лямбдах. Воно дає змогу лямбді не просто прочитати копію зовнішньої змінної, а змінювати її всередині себе, зберігаючи власний стан між викликами (створюючи по суті власний закритий стан, як у лічильниках чи замиканнях).
+Давайте розберемо, як це працює і що саме від вас вимагається реалізувати.
+Головна ідея: у чому різниця звичайного захвату і mut захвату?
+Звичайний захват ([n]):
+Створює константну копію зовнішньої змінної всередині структури лямбди.
+Поле структури оголошується як const (або просто не може змінюватися).
+Якщо ви спробуєте всередині лямбди написати n := n + 1, компілятор видасть помилку: cannot assign to 'k': the capture 'k' is const, write [mut k].
+Мутабельний захват ([mut n]):
+Створює мутабельну копію зовнішньої змінної всередині структури.
+Поле структури робиться мутабельним (mut).
+Тепер усередині тіла лямбди ви можете змінювати цю змінну (n := n + 1).
+Розбір прикладу з завдання
+Поглянемо на цей код:
+i32 n{0}
+fn next := [mut n]() -> i32
+{
+    n := n + 1
+    exit n
+}
+print(next()) // Виведе 1
+print(next()) // Виведе 2
 
-5.3. Що користувач відкинув / не взяв у код:
-   - Нічого з фінальної реалізації не відкидалось.
+
+Як це працює:
+Змінна n зовні дорівнює 0.
+Лямбда next захоплює її через [mut n]. Під капотом створюється структура, де поле n є мутабельним (починається з копії зовнішнього 0).
+Коли ви викликаєте next(), спрацьовує метод call, який робить n := n + 1 (збільшує свою внутрішню копію в структурі) і повертає її.
+При першому виклику повертається 1, при другому — 2.
+Важливий момент: Зовнішня змінна n (яка була оголошена згори зі значенням 0) не змінюється! У кінці програми print(n) (або exit n) виведе 0, тому що лямбда змінювала лише свою власну приватну копію.
+Захват іншої лямбди через mut (на прикладі twice)
+У завданні є такий фрагмент:
+fn twice := [mut next]() -> i32
+{
+    i32 a{next()}
+    i32 b{next()}
+    i32 r{a * 10 + b}
+    exit r
+}
+
+
+next — це сама по собі лямбда (тобто об'єкт-структура).
+Коли ми пишемо [mut next], ми робимо копію об'єкта next всередину twice.
+Оскільки копія захоплена з mut, метод twice має право викликати next(), який змінює свій внутрішній стан.
+При цьому оригінальний next (який живе зовні) продовжує своє життя окремо від копії всередині twice.
+Що потрібно реалізувати в компіляторі?
+Парсер:
+Дозволити ключове слово mut всередині списку захвату лямбды: [mut ident], а також комбінації на кшталт [mut a, b, mut c].
+Семантичний аналіз (Type Checker & Desugaring):
+Поля структури: Якщо захват оголошено як mut n, то відповідне поле в згенерованій структурі лямбди має отримати статус мутабельного (mut). Якщо просто n — поле залишається константним.
+Перевірка присвоєння: Дозволити присвоєння (n := ...) у тілі лямбди тільки для тих захоплених змінних, які мають префікс mut. Якщо змінна захоплена без mut, а її намагаються змінити — видавати помилку: cannot assign to 'k': the capture 'k' is const, write [mut k].
+Мутабельність самої змінної-лямбди: Умова каже: "The closure variable is mut when one of its captures is mut" (Змінна замикання стає мутабельною, якщо хоча б один її захват є мутабельним). Це важливо для Завдання 1: якщо ви викликаєте метод, який змінює стан об'єкта (а мутабельний захват робить метод call мутаючим), сама змінна лямбди повинна вважатися мутабельною (mut next), щоб її можна було викликати.
+Перевірка для twice: Якщо ви захватили іншу лямбду без mut ([next]), вона вважається константною копією, і виклик методів, що її змінюють, заборонений (помилка: cannot call 'next': its 'call' changes it, and it is not mut).
+Тести (як вимагається в завданні): Потрібно додати у папку tests/ нові файли з тестами для перевірки:
+Лічильника з mut захватом.
+mut захвату, який змінюється всередині циклу.
+Двох лямбд, які мають власні окремі копії однієї й тієї самої змінної.
+Комбінації константного і мутабельного захвату в одному списку ([const_var, mut mut_var]).
+Тест на помилку при спробі викликати мутуючий замикальний об'єкт, захоплений без mut.
+
+User prompt: так а це мут для самої лямбди чи її параметрів
+Response: Це mut не для параметрів, а для копій захоплених змінних (captures) всередині лямбди.
+Давайте чітко розкладемо різницю на трьох частинах лямбди:
+fn next := [mut n](i32 mut y) -> i32
+//          ^^^^^  ^^^^^^^^^
+//            1        2
+
+
+1. [mut n] — Захоплені змінні (Captures)
+Це саме те, про що йдеться в додатковому завданні.
+Коли ви пишете [mut n], ви кажете: «Зроби для лямбди її власну мутабельну копію зовнішньої змінної n».
+Це робить поле згенерованої структури мутабельним (i32 mut n).
+Завдяки цьому всередині тіла лямбди ви можете писати n := n + 1.
+Оскільки виклик лямбди тепер змінює її внутрішній стан (поле n), сам метод call стає мутаючим.
+2. (i32 mut y) — Параметри функції (Parameters)
+Параметри — це те, що передається у лямбду при виклику (наприклад, next(5)).
+Вони не мають стосунку до списку у квадратних дужках [...].
+mut для параметрів відповідає за те, чи можна змінювати сам аргумент y всередині функції.
+3. Сама змінна-лямбда (next)
+Вимова у завданні каже:
+"The closure variable is mut when one of its captures is mut"
+Це означає, що як тільки ви додаєте хоча б один mut у квадратні дужки (наприклад, [mut n]), компілятор автоматично робить саму змінну next мутабельним об'єктом (як Scale mut next).
+Завдяки цьому ви можете викликати next(), і компілятор Завдання 1 дозволить цей виклик, бо знає, що об'єкт next має право змінювати свій стан.
+Підсумок
+Ключове слово mut у списку [mut n] робить поле структури (захоплену копію) мутабельним, дозволяючи лямбді мати власний стан, який змінюється з кожним викликом.
+
+User prompt: давай ще раз але дуже просто як має працювати mutable capture?
+Response: Давай дуже просто, на пальцях.
+У тебе є зовнішня змінна, наприклад i32 n{0}.
+1. Звичайний захват [n] (Константна копія)
+Лямбда робить копію n усередину себе.
+Але ця копія заморожена (const).
+Якщо ти спробуєш всередині лямбди написати n := n + 1, компілятор вдарить тебе по руках і скаже: «Не можна змінювати, це константна копія!».
+2. Мутабельний захват [mut n] (Жива копія, яку можна крутити)
+Лямбда теж робить копію n усередину себе.
+Але ця копія мутабельна (змінна).
+Тепер усередині лямбди ти можеш писати n := n + 1.
+Що відбувається на практиці?
+Коли ти пишеш лічильник:
+i32 n{0}
+fn next := [mut n]() -> i32
+{
+    n := n + 1
+    exit n
+}
+
+
+Лямбда створює свою власну кишенькову копію змінної n (починається з 0).
+Коли ти викликаєш next(), вона бере свою кишенькову n, додає одиницю (стає 1) і повертає її.
+Наступного разу вона бере цю вже змінену кишенькову n (вона ж 1), додає одиницю (стає 2) і повертає її.
+Головний прикол: Зовнішня змінна n (та, що була згори зі значенням 0) взагалі не чіпається! Вона так і залишається нулем. Лямбда змінює лише свою власну копію, яку сховала у своєму «кишені» (mut n).
+
+User prompt: все зрозуміла, а що має відбуватись, коли lambda захоплює іншу lambda?
+Response: Коли лямбда захоплює іншу лямбду, відбувається те саме, що й з будь-якою іншою змінною: створюється копія об'єкта (структури) цієї лямбди всередині нової лямбди.
+Давай подивимося на це на прикладі twice із завдання:
+fn twice := [mut next]() -> i32
+{
+    i32 a{next()}
+    i32 b{next()}
+    i32 r{a * 10 + b}
+    exit r
+}
+
+
+Як це працює крок за кроком:
+Захоплення — це створення копії: Коли twice оголошується і в її квадратних дужках написано [mut next], компілятор бере поточний стан об'єкта next і повністю копіює його всередину структури twice (як поле).
+Оригінал і копія живуть окремо: Після цього моменту існують два незалежні лічильники next:
+Оригінал next, який живий зовні.
+Копія next, яка схована всередині структури twice.
+Виклики всередині twice: Коли twice викликає next() усередині себе (next(), next()), вона крутить свою внутрішню копію, не чіпаючи зовнішній оригінал.
+Чому потрібен саме [mut next]? Оскільки виклики next() змінюють її внутрішній лічильник ( роблять n := n + 1), внутрішнє поле next усередині twice має бути мутабельним.
+Якщо написати просто [next] (без mut), то копія стане константною (const).
+Тоді компілятор заборонить викликати її методи всередині twice і видасть помилку:
+cannot call 'next': its 'call' changes it, and it is not mut.
+
+User prompt: Я правильно розумію, що копія створюється під час оголошення lambda, а не під час кожного виклику? Як це перевірити окремим тестом?
+Response: Так, ви розумієте абсолютно правильно! Копія захоплених змінних створюється рівно один раз — у момент оголошення (створення) лямбди. Під час кожного подальшого виклику лямбда використовує вже ту саму, створену раніше копію (і якщо вона мутабельна, то просто оновлює її стан).
+Ось як можна написати простий і наочний тест, щоб перевірити це на практиці:
+Ідея тесту
+Створюємо зовнішню змінну i32 mut n{10}.
+Оголошуємо лямбду f із захватом [mut n]. У цей момент усередині лямбди створюється копія, яка дорівнює 10.
+Змінюємо зовнішню змінну: n := 999.
+Викликаємо лямбду f().
+Якщо копія робилася б під час виклику, лямбда взяла б нове значення 999.
+Оскільки копія робиться під час оголошення, лямбда продовжить працювати зі своєю старою копією (10).
+Сам код тесту (наприклад, tests/capture_timing.txt):
+i32 mut n{10}
+fn f := [mut n]() -> i32
+{
+    n := n + 1
+    exit n
+}
+
+// Змінюємо зовнішню n ПІСЛЯ оголошення лямбди
+n := 999
+
+// Викликаємо лямбду. 
+// Вона має повернути 11 (10 + 1), а не 1000 (999 + 1)
+print(f())
+
+// Перевіряємо, що зовнішня n стала 999, а не змінилася всередині лямбди
+print(n)
+
+exit 0
+
+
+Expected output для цього тесту:
+11
+999
+Program exit with result 0
+
+
+Цей тест ідеально доводить, що захоплення — це знимок (snapshot) стану в момент оголошення, а не живе посилання на зовнішню змінну.
+
+Фактичне зіставлення відповідей Gemini з реалізацією
+Примітка: нижче «взято» означає, що відповідна ідея справді відображена в коді або тестах. «Не взято»
+позначає запропонований варіант чи приклад, якого немає в реалізації; це не означає, що він був окремо
+відхилений у дискусії.
+
+1. Запит про те, що треба зробити для ADDITIONAL TASK — MUT CAPTURES:
+   Взято:
+   - Синтаксис `[mut n]`; поле capture стає mutable, а присвоєння до звичайного `[n]` лишається
+     забороненим. Це реалізовано в `Parser.parse_lambda` і `SemanticChecker.visit_lambda`.
+   - Closure-об'єкт стає mutable, якщо має хоча б один mut capture; mutating-властивість його `call`
+     перевіряється на місці виклику стандартним правилом callable objects.
+   - П'ять запитаних груп тестів додано: `lambda_mut_counter`, `lambda_mut_loop`,
+     `lambda_mut_independent_copies`, `lambda_mut_mixed`, `lambda_const_capture_call`.
+   Не взято:
+   - Жодного альтернативного способу передавання captures за посиланням не додавали: умова вимагає
+     власну копію. У наявній реалізації capture копіюється у поле closure.
+
+2. Запит «це mut для самої лямбди чи її параметрів?»:
+   Взято:
+   - `mut` у квадратних дужках визначає mutability поля-копії capture; `Decl` lambda є mutable,
+     коли є хоча б один mutable capture. Це видно в `SemanticChecker.visit_lambda` і
+     `LambdaNode.dump` під `--ast-checked`.
+   - Окремо перевіряється, що const capture не можна змінювати, а виклик через const capture іншої
+     lambda заборонений, якщо її `call` змінює стан (`tests/err/lambda_assign_capture.txt`,
+     `tests/err/lambda_const_capture_call.txt`).
+   Не взято:
+   - `mut` для параметрів lambda не додавали: завдання стосується capture list, а параметри
+     обробляються наявним `parse_param_list`; приклад Gemini з `(i32 mut y)` не є частиною цієї
+     реалізації.
+
+3. Запит «поясни дуже просто, як має працювати mutable capture»:
+   Взято:
+   - Поведінку лічильника: захоплена копія зберігає стан між викликами, а зовнішня змінна не
+     змінюється. Це перевіряє `tests/ok/lambda_mut_counter.txt` (два виклики повертають 1 і 2,
+     фінальний результат зовнішньої `n` — 0).
+   Не взято:
+   - Нової окремої реалізації на додачу до правил із пунктів 1–2 не знадобилося; пояснення Gemini
+     описувало вже реалізовану модель копії.
+
+4. Запит «що відбувається, коли lambda захоплює іншу lambda?»:
+   Взято:
+   - Lambda зберігається як closure-структура, тому інше closure можна захопити як значення-копію.
+     У `[mut next]` поле копії mutable, тож її `call` можна викликати mutating способом; оригінал
+     продовжує мати власний стан. Це перевіряє `tests/ok/lambda_mut_capture_lambda.txt`:
+     зовнішній `next` рахує до 2, копія всередині `twice` повертає 34, зовнішній далі повертає 3.
+   - Варіант без `mut` відхиляється тестом `tests/err/lambda_const_capture_call.txt`.
+   Не взято:
+   - Посилання на оригінальну lambda замість копії не реалізовано; воно суперечило б семантиці
+     capture-by-copy у завданні.
+
+5. Запит про копію capture в циклі:
+   Взято:
+   - Значення capture зчитується та записується у closure при виконанні lambda-декларації.
+     Якщо декларація всередині циклу, store виконується на кожній ітерації з поточним значенням.
+     Це перевіряють `tests/ok/lambda_loop_capture.txt` і `tests/ok/lambda_mut_loop.txt`.
+   Не взято / важливе уточнення:
+   - Не створюється окремий stack allocation на кожній ітерації: `CodeGenVisitor.visit_lambda`
+     використовує `alloca_in_entry` для слота, а під час виконання декларації записує актуальні
+     captures у цей слот. Це відповідає тестам, де closure викликається в межах ітерації; збереження
+     багатьох одночасно живих closure із циклу не є підтриманою можливістю мови.
+
+6. Запит, чи копіювання відбувається під час оголошення, і пропозиція тесту з `[mut n]`, потім
+   `n := 999`:
+   Взято:
+   - Capture копіюється в момент виконання декларації closure, не при кожному виклику: кодогенератор
+     обчислює значення capture і робить `store` у полі структури в `CodeGenVisitor.visit_lambda`.
+     Тест `tests/ok/lambda_snapshot.txt` змінює зовнішній `k` після оголошення lambda та перевіряє,
+     що lambda повертає значення зі своєї копії.
+   Не взято / обмеження перевірки:
+   - Запропонований окремий тест із саме `[mut n]` та подальшим `n := 999` не доданий. Наявний
+     `lambda_snapshot` перевіряє snapshot для звичайного const capture, а `lambda_mut_counter`
+     перевіряє mutable стан і незмінність зовнішнього `n`; ці два тести підтверджують суміжні
+     властивості, але не є точним повторенням запропонованого прикладу.
