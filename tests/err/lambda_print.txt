@@ -1,0 +1,6 @@
+fn identity := [](i32 x) -> i32
+{
+exit x
+}
+print(identity)
+exit 0
