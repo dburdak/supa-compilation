@@ -1,0 +1,14 @@
+struct Point
+{
+i32 mut x
+i32 mut y
+fn add2 := (i32 dx, i32 dy) -> i32
+{
+x := x + dx
+y := y + dy
+exit x + y
+}
+}
+Point mut p{10, 20}
+i32 r{p.add2(3, 4)}
+exit r

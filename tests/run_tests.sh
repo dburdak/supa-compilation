@@ -37,10 +37,19 @@ NC='\033[0m'
 
 execute_ir() {
     local ll_path="$1"
+    local input_file="${2:-}"
     if command -v lli >/dev/null 2>&1; then
-        lli "$ll_path" 2>&1
+        if [ -n "$input_file" ] && [ -f "$input_file" ]; then
+            lli "$ll_path" < "$input_file" 2>&1
+        else
+            lli "$ll_path" 2>&1
+        fi
     elif [ -f "$RUN_LL" ]; then
-        "$PYTHON" "$RUN_LL" "$ll_path" 2>&1
+        if [ -n "$input_file" ] && [ -f "$input_file" ]; then
+            "$PYTHON" "$RUN_LL" "$ll_path" < "$input_file" 2>&1
+        else
+            "$PYTHON" "$RUN_LL" "$ll_path" 2>&1
+        fi
     else
         echo "ERROR: neither 'lli' nor $RUN_LL is available to execute the IR" >&2
         return 127
@@ -83,7 +92,8 @@ run_valid_test() {
     fi
     
     local actual_out expected_out norm_actual norm_expected
-    actual_out=$(execute_ir "$TMP_LL")
+    local input_file="${txt%.txt}.in"
+    actual_out=$(execute_ir "$TMP_LL" "$input_file")
     expected_out=$(cat "$expected_out_file")
     
     norm_actual=$(normalize_output "$actual_out")

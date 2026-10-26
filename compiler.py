@@ -59,6 +59,68 @@ fmt_scan = ir.GlobalVariable(module, ir.ArrayType(I8, len(scan_fmt_text)), name=
 fmt_scan.linkage, fmt_scan.global_constant = "private", True
 fmt_scan.initializer = ir.Constant(ir.ArrayType(I8, len(scan_fmt_text)), bytearray(scan_fmt_text))
 
+# additional format strings for print() of i32, strings, struct fields
+print_i32_text = b"%d\n\0"
+fmt_print_i32 = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_i32_text)), name="fmt_print_i32")
+fmt_print_i32.linkage, fmt_print_i32.global_constant = "private", True
+fmt_print_i32.initializer = ir.Constant(ir.ArrayType(I8, len(print_i32_text)), bytearray(print_i32_text))
+
+print_str_text = b"%s\n\0"
+fmt_print_str = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_str_text)), name="fmt_print_str")
+fmt_print_str.linkage, fmt_print_str.global_constant = "private", True
+fmt_print_str.initializer = ir.Constant(ir.ArrayType(I8, len(print_str_text)), bytearray(print_str_text))
+
+# struct field separator formats (no newline)
+field_sep_text = b", \0"
+fmt_field_sep = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_sep_text)), name="fmt_field_sep")
+fmt_field_sep.linkage, fmt_field_sep.global_constant = "private", True
+fmt_field_sep.initializer = ir.Constant(ir.ArrayType(I8, len(field_sep_text)), bytearray(field_sep_text))
+
+# "%s" for inline struct printing (no newline, for struct field labels)
+plain_str_text = b"%s\0"
+fmt_plain_str = ir.GlobalVariable(module, ir.ArrayType(I8, len(plain_str_text)), name="fmt_plain_str")
+fmt_plain_str.linkage, fmt_plain_str.global_constant = "private", True
+fmt_plain_str.initializer = ir.Constant(ir.ArrayType(I8, len(plain_str_text)), bytearray(plain_str_text))
+
+# "%d" inline (no newline) for struct field int printing
+field_int_text = b"%d\0"
+fmt_field_int = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_int_text)), name="fmt_field_int")
+fmt_field_int.linkage, fmt_field_int.global_constant = "private", True
+fmt_field_int.initializer = ir.Constant(ir.ArrayType(I8, len(field_int_text)), bytearray(field_int_text))
+
+# "%lld" inline (no newline) for struct field i64 printing
+field_i64_text = b"%lld\0"
+fmt_field_i64 = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_i64_text)), name="fmt_field_i64")
+fmt_field_i64.linkage, fmt_field_i64.global_constant = "private", True
+fmt_field_i64.initializer = ir.Constant(ir.ArrayType(I8, len(field_i64_text)), bytearray(field_i64_text))
+
+# closing "}\n" for struct printing
+struct_close_text = b"}\n\0"
+fmt_struct_close = ir.GlobalVariable(module, ir.ArrayType(I8, len(struct_close_text)), name="fmt_struct_close")
+fmt_struct_close.linkage, fmt_struct_close.global_constant = "private", True
+fmt_struct_close.initializer = ir.Constant(ir.ArrayType(I8, len(struct_close_text)), bytearray(struct_close_text))
+
+# "}" inline (no newline) for nested struct printing
+struct_close_inline_text = b"}\0"
+fmt_struct_close_inline = ir.GlobalVariable(module, ir.ArrayType(I8, len(struct_close_inline_text)), name="fmt_struct_close_inline")
+fmt_struct_close_inline.linkage, fmt_struct_close_inline.global_constant = "private", True
+fmt_struct_close_inline.initializer = ir.Constant(ir.ArrayType(I8, len(struct_close_inline_text)), bytearray(struct_close_inline_text))
+
+# Cached global string constants for struct printing (created on demand)
+_struct_str_globals = {}
+
+def _get_str_global(text_bytes, name_hint):
+    """Get or create a global constant for the given bytes string."""
+    key = text_bytes
+    if key not in _struct_str_globals:
+        gv = ir.GlobalVariable(module, ir.ArrayType(I8, len(text_bytes)), name=name_hint)
+        gv.linkage, gv.global_constant = "private", True
+        gv.initializer = ir.Constant(ir.ArrayType(I8, len(text_bytes)), bytearray(text_bytes))
+        _struct_str_globals[key] = gv
+    return _struct_str_globals[key]
+
+
+
 TYPES = {
     "i32": I32,
     "i64": I64,
@@ -184,6 +246,15 @@ def lex(data: bytes):
             elif b == ord("="):
                 state = "EQUAL"
                 start_col = col
+            elif b == ord('#'):
+                # comment: skip rest of line
+                while i < len(data) and data[i] != 10:
+                    i += 1
+                continue
+            elif b == ord('"'):
+                state = "STRING"
+                start = i + 1  # content starts after opening quote
+                start_col = col
             elif is_operator(b):
                 tokens.append(Token("operator", chr(b), line, col))
             else:
@@ -243,6 +314,17 @@ def lex(data: bytes):
                 tokens.append(Token("operator", "-", line, start_col))
                 state = "START"
                 continue
+
+        elif state == "STRING":
+            if b is None or b == 10:
+                # unclosed string literal
+                raise_syntax_err(line, start_col, "unclosed string literal")
+            elif b == ord('"'):
+                # closing quote — emit the token with the text between quotes
+                text_val = data[start:i].decode('utf-8', errors='replace')
+                tokens.append(Token("string_lit", text_val, line, start_col))
+                state = "START"
+            # else: still inside the string, keep scanning
 
         i += 1
         col += 1
@@ -323,11 +405,27 @@ class MemberCallNode(ExprNode):
         return None
 
 
+class StringLitNode(ExprNode):
+    """AST node for string literals in print(\"...\")."""
+    def __init__(self, line, col, value):
+        self.line, self.col = line, col
+        self.value = value  # str
+        self.type = "string"
+
+    def dump(self, indent=0):
+        print(" " * indent + f'StringLit "{self.value}"')
+
+    def accept(self, visitor):
+        if hasattr(visitor, 'visit_string_lit'):
+            return visitor.visit_string_lit(self)
+        return "string"
+
+
 class PrintNode(StmtNode):
-    """AST node for: print(expr)"""
+    """AST node for: print(expr) or print(\"literal\")"""
     def __init__(self, line, col, arg):
         self.line, self.col = line, col
-        self.arg = arg   # ExprNode
+        self.arg = arg   # ExprNode or StringLitNode
 
     def dump(self, indent=0):
         print(" " * indent + "Print")
@@ -774,6 +872,11 @@ class Parser:
             fields.append(FieldDef(type_tok.line, type_tok.col, type_tok.text, mutable, fname_tok.text))
 
         if not fields:
+            # Report error at the fn token, not the struct brace
+            nxt = self.peek_line()
+            if nxt is not None and nxt[0].kind == "keyword" and nxt[0].text == "fn":
+                fn_tok = nxt[0]
+                raise_syntax_err(fn_tok.line, fn_tok.col, "member function before first field")
             raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct must have at least one field (member function before first field)")
 
         # Phase 2: parse member functions (stop at '}')
@@ -1111,10 +1214,16 @@ class Parser:
         return FnCallNode(name_tok.line, name_tok.col, name_tok.text, args)
 
     def parse_print(self):
-        """Parse: print(expr)"""
+        """Parse: print(expr) or print(\"string\")"""
         print_tok = self.eat()  # 'print'
         self.expect("lparen", "'('")
-        arg = self.parse_expr()
+        # Check for string literal
+        tok = self.peek()
+        if tok is not None and tok.kind == "string_lit":
+            self.eat()
+            arg = StringLitNode(tok.line, tok.col, tok.text)
+        else:
+            arg = self.parse_expr()
         self.expect("rparen", "')'")
         return PrintNode(print_tok.line, print_tok.col, arg)
 
@@ -1126,6 +1235,7 @@ class SemanticChecker:
         self.functions = {} # name -> FnDeclNode (for signature lookup)
         self.current_fn = None   # FnDeclNode/MemberFnDeclNode being checked, or None
         self.current_struct = None  # StructDefNode whose method is being checked, or None
+        self.recorded_member_calls = []  # list[MemberCallNode] for mutation verification
 
     def _sem_err(self, line, col, msg):
         sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
@@ -1177,16 +1287,25 @@ class SemanticChecker:
             raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
         self.scopes[-1][name] = decl_node
 
-    # ── two-pass program visit ────────────────────────────────────────
+    # ── multi-pass program visit ────────────────────────────────────────
     def visit_program(self, node):
-        # Pass 1: collect struct defs and function signatures
+        # Pass 1: collect struct types and register all function signatures
+        #         (so member fn bodies can call global fns declared later)
         for stmt in node.stmts:
             if isinstance(stmt, StructDefNode):
-                self.visit_struct_def(stmt)
+                self._register_struct_type(stmt)
             elif isinstance(stmt, FnDeclNode):
                 self._register_fn_sig(stmt)
 
-        # Pass 2: check non-struct/non-fn top-level stmts and fn bodies
+        # Pass 2: check member function bodies (now global fns are all known)
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                self._check_struct_methods(stmt)
+
+        # Pass 2.5: compute fixed-point mutating property across all structs
+        self._compute_all_mutating()
+
+        # Pass 3: check non-struct/non-fn top-level stmts and fn bodies
         for stmt in node.stmts:
             if isinstance(stmt, StructDefNode):
                 pass  # already done
@@ -1197,6 +1316,14 @@ class SemanticChecker:
 
         if node.exit:
             node.exit.accept(self)
+
+        # Pass 4: verify that all mutating member calls across the AST are valid
+        self._check_all_mutating_calls()
+
+    def _check_all_mutating_calls(self):
+        for mcall in self.recorded_member_calls:
+            if getattr(mcall.mfn, 'is_mutating', False):
+                self._check_receiver_mutable(mcall.target_node, mcall, mcall.mfn.name)
 
     def _register_fn_sig(self, node):
         """Register function name + signature without checking body."""
@@ -1242,7 +1369,8 @@ class SemanticChecker:
         self.current_fn = saved_fn
         self.scopes = saved_scopes
 
-    def visit_struct_def(self, node):
+    def _register_struct_type(self, node):
+        """Register struct name + field layout without checking method bodies."""
         if node.name in self.structs or node.name in ("i32", "i64", "bool"):
             raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
         for f in node.fields:
@@ -1251,56 +1379,138 @@ class SemanticChecker:
             elif f.type_name not in ("i32", "i64", "bool") and f.type_name not in self.structs:
                 raise_err(11, f.line, f.col, ue_part=f"'{f.type_name}'")
         self.structs[node.name] = node
-        # Validate signatures and check bodies of member functions
+        # Validate method signatures only (bodies checked in pass 2)
         for mfn in node.methods:
             for p in mfn.params:
                 self._validate_type(p.type_name, p.line, p.col)
             self._validate_type(mfn.ret_type, mfn.line, mfn.col)
-            self._check_member_fn_body(node, mfn)
-        # After all bodies are checked, compute mutating set iteratively
-        self._compute_mutating(node)
 
-    def _compute_mutating(self, struct_node):
-        """Mark methods that mutate fields (or call mutating methods on self)."""
-        # A method is mutating if:
-        #   1. Its body assigns a field (assign to a name that is a field), OR
-        #   2. It calls (as plain FnCall) another method that is mutating.
-        # Iterate until stable.
+    def _check_struct_methods(self, node):
+        """Check member function bodies (called after all fn sigs registered)."""
+        for mfn in node.methods:
+            self._check_member_fn_body(node, mfn)
+
+    def visit_struct_def(self, node):
+        """Legacy entry point — used by codegen visitor; semantic checker uses _register_struct_type."""
+        self._register_struct_type(node)
+        self._check_struct_methods(node)
+
+    def _get_root_name(self, node):
+        if isinstance(node, VarNode):
+            return node.name
+        if isinstance(node, FieldAccessNode):
+            return self._get_root_name(node.obj)
+        return None
+
+    def _compute_all_mutating(self):
+        """Compute is_mutating for all member functions across all structs until stable."""
         changed = True
         while changed:
             changed = False
-            for mfn in struct_node.methods:
-                if getattr(mfn, 'is_mutating', False):
-                    continue  # already marked
-                if self._body_is_mutating(struct_node, mfn):
-                    mfn.is_mutating = True
-                    changed = True
+            for sname, struct_node in self.structs.items():
+                for mfn in struct_node.methods:
+                    if getattr(mfn, 'is_mutating', False):
+                        continue
+                    if self._body_is_mutating(struct_node, mfn):
+                        mfn.is_mutating = True
+                        changed = True
 
     def _body_is_mutating(self, struct_node, mfn):
-        """Return True if mfn's body contains a field assignment or mutating self-call."""
+        """Return True if mfn's body contains a field assignment or mutating call on self/fields."""
         field_names = {f.name for f in struct_node.fields}
         method_names = {m.name for m in struct_node.methods}
-        return self._stmts_mutating(mfn.body.stmts, field_names, method_names, struct_node)
+        return self._block_mutating(mfn.body, field_names, method_names, struct_node)
+
+    def _block_mutating(self, block, field_names, method_names, struct_node):
+        if block is None:
+            return False
+        if self._stmts_mutating(block.stmts, field_names, method_names, struct_node):
+            return True
+        if block.exit_node is not None and getattr(block.exit_node, 'val', None) is not None:
+            if self._expr_mutating(block.exit_node.val, field_names, method_names, struct_node):
+                return True
+        return False
+
+    def _expr_mutating(self, expr, field_names, method_names, struct_node):
+        """Return True if expr contains a call to a mutating method on self or a field."""
+        if expr is None:
+            return False
+        if isinstance(expr, FnCallNode):
+            if expr.name in method_names:
+                mfn2 = next((m for m in struct_node.methods if m.name == expr.name), None)
+                if mfn2 and getattr(mfn2, 'is_mutating', False):
+                    return True
+            for arg in expr.args:
+                if self._expr_mutating(arg, field_names, method_names, struct_node):
+                    return True
+        elif isinstance(expr, MemberCallNode):
+            # Check if this is a call on a field of struct_node
+            root = self._get_root_name(expr.target_node)
+            if root and root in field_names:
+                fdef = next((f for f in struct_node.fields if f.name == root), None)
+                if fdef and fdef.type_name in self.structs:
+                    target_sdef = self.structs[fdef.type_name]
+                    mfn2 = next((m for m in target_sdef.methods if m.name == expr.member_name), None)
+                    if mfn2 and getattr(mfn2, 'is_mutating', False):
+                        return True
+            if self._expr_mutating(expr.target_node, field_names, method_names, struct_node):
+                return True
+            for arg in expr.args:
+                if self._expr_mutating(arg, field_names, method_names, struct_node):
+                    return True
+        elif isinstance(expr, BinOpNode):
+            return (self._expr_mutating(expr.left, field_names, method_names, struct_node) or
+                    self._expr_mutating(expr.right, field_names, method_names, struct_node))
+        elif isinstance(expr, NotNode):
+            return self._expr_mutating(expr.operand, field_names, method_names, struct_node)
+        elif isinstance(expr, FieldAccessNode):
+            return self._expr_mutating(expr.obj, field_names, method_names, struct_node)
+        elif isinstance(expr, StructInitNode):
+            for ie in expr.inits:
+                if self._expr_mutating(ie, field_names, method_names, struct_node):
+                    return True
+        return False
 
     def _stmts_mutating(self, stmts, field_names, method_names, struct_node):
         for stmt in stmts:
             if isinstance(stmt, AssignNode):
-                # Assignment to a field name (with or without chain)
+                # Assignment to a field name of this struct
                 if stmt.name in field_names:
                     return True
-            if isinstance(stmt, FnCallNode):
-                # A bare FnCall inside a member fn whose name is a method
+                if self._expr_mutating(stmt.value, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, DeclNode):
+                for init_expr in (stmt.inits if isinstance(stmt.inits, list) else [stmt.init]):
+                    if init_expr is not None and self._expr_mutating(init_expr, field_names, method_names, struct_node):
+                        return True
+            elif isinstance(stmt, FnCallNode):
                 if stmt.name in method_names:
                     mfn2 = next((m for m in struct_node.methods if m.name == stmt.name), None)
                     if mfn2 and getattr(mfn2, 'is_mutating', False):
                         return True
-            if isinstance(stmt, IfNode):
-                if self._stmts_mutating(stmt.then_block.stmts, field_names, method_names, struct_node):
+                for arg in stmt.args:
+                    if self._expr_mutating(arg, field_names, method_names, struct_node):
+                        return True
+            elif isinstance(stmt, MemberCallNode):
+                if self._expr_mutating(stmt, field_names, method_names, struct_node):
                     return True
-                if stmt.else_block and self._stmts_mutating(stmt.else_block.stmts, field_names, method_names, struct_node):
+            elif isinstance(stmt, PrintNode):
+                if self._expr_mutating(stmt.arg, field_names, method_names, struct_node):
                     return True
-            if isinstance(stmt, WhileNode):
-                if self._stmts_mutating(stmt.body.stmts, field_names, method_names, struct_node):
+            elif isinstance(stmt, IfNode):
+                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                    return True
+                if self._block_mutating(stmt.then_block, field_names, method_names, struct_node):
+                    return True
+                if stmt.else_block and self._block_mutating(stmt.else_block, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, WhileNode):
+                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                    return True
+                if self._block_mutating(stmt.body, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, ExitNode):
+                if stmt.val and self._expr_mutating(stmt.val, field_names, method_names, struct_node):
                     return True
         return False
 
@@ -1356,17 +1566,18 @@ class SemanticChecker:
             arg.accept(self)
             self._check_assignable(arg, param.type_name, node,
                                    f"pass argument to '{param.name}'")
-        # Mutation check: if the method is mutating, receiver must be mutable
-        if getattr(mfn, 'is_mutating', False):
-            self._check_receiver_mutable(node.target_node, node, mfn.name)
         node.mfn = mfn
         node.type = mfn.ret_type
+        self.recorded_member_calls.append(node)
+        # Mutation check: if the method is already known mutating, receiver must be mutable
+        if getattr(mfn, 'is_mutating', False):
+            self._check_receiver_mutable(node.target_node, node, mfn.name)
         return node.type
 
     def _check_receiver_mutable(self, expr, call_node, method_name):
         """Ensure the receiver is a mutable variable (or mutable field chain)."""
         if isinstance(expr, VarNode):
-            decl = self._lookup(expr.name)
+            decl = getattr(expr, 'decl', None) or self._lookup(expr.name)
             if decl is None:
                 return  # undeclared — already will have errored
             if not decl.mutable:
@@ -1572,12 +1783,20 @@ class SemanticChecker:
         node.self_method = None
         return node.type
 
+    def visit_string_lit(self, node):
+        node.type = "string"
+        return "string"
+
     def visit_print(self, node):
-        """Type-check print(expr): expr must be i32, i64, or bool."""
+        """Type-check print(expr): accepts i32, i64, bool, string literal, or struct."""
+        if isinstance(node.arg, StringLitNode):
+            node.arg.type = "string"
+            return
         t = node.arg.accept(self)
-        if t not in ("i32", "i64", "bool"):
+        allowed = ("i32", "i64", "bool", "string")
+        if t not in allowed and t not in self.structs:
             self._sem_err(node.line, node.col,
-                          f"print requires i32, i64, or bool argument, got {t}")
+                          f"print requires i32, i64, bool, a string, or a struct argument, got {t}")
 
     def visit_not(self, node):
         t = node.operand.accept(self)
@@ -1654,18 +1873,19 @@ class CodeGenVisitor:
         return self.builder
 
     def visit_program(self, node):
-        # Pass 1: declare all struct types and IR function prototypes
+        # Pass 1: declare all struct types, member function prototypes, and global function prototypes
         for stmt in node.stmts:
             if isinstance(stmt, StructDefNode):
-                stmt.accept(self)
+                self._declare_struct_ir(stmt)
             elif isinstance(stmt, FnDeclNode):
                 self.fn_nodes[stmt.name] = stmt
                 self._declare_fn_ir(stmt)
 
-        # Pass 2: generate function bodies, then top-level stmts
+        # Pass 2: generate all function bodies (member fns and global fns), then top-level stmts
         for stmt in node.stmts:
             if isinstance(stmt, StructDefNode):
-                pass
+                for mfn in stmt.methods:
+                    self._gen_member_fn_body(stmt, mfn)
             elif isinstance(stmt, FnDeclNode):
                 self._gen_fn_body(stmt)
             else:
@@ -1675,6 +1895,22 @@ class CodeGenVisitor:
             node.exit.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.unreachable()
+
+    def _declare_struct_ir(self, node):
+        """Declare struct LLVM type and IR function prototypes for its member functions."""
+        struct_type = module.context.get_identified_type(node.name)
+        field_types = [TYPES[f.type_name] for f in node.fields]
+        struct_type.set_body(*field_types)
+        TYPES[node.name] = struct_type
+        self.struct_defs[node.name] = node
+        # Declare IR functions for each member function
+        for mfn in node.methods:
+            param_types = [ir.PointerType(struct_type)] + [TYPES[p.type_name] for p in mfn.params]
+            ret_llvm = TYPES[mfn.ret_type]
+            fn_type = ir.FunctionType(ret_llvm, param_types)
+            ir_fn = ir.Function(module, fn_type, name=f"{node.name}_{mfn.name}")
+            self.ir_functions[f"{node.name}.{mfn.name}"] = ir_fn
+            self.fn_nodes[f"{node.name}.{mfn.name}"] = mfn
 
     def _declare_fn_ir(self, node):
         """Create an ir.Function prototype for the function (no body yet)."""
@@ -1728,20 +1964,7 @@ class CodeGenVisitor:
         return value
 
     def visit_struct_def(self, node):
-        struct_type = module.context.get_identified_type(node.name)
-        field_types = [TYPES[f.type_name] for f in node.fields]
-        struct_type.set_body(*field_types)
-        TYPES[node.name] = struct_type
-        self.struct_defs[node.name] = node
-        # Declare IR functions for each member function
-        for mfn in node.methods:
-            param_types = [ir.PointerType(struct_type)] + [TYPES[p.type_name] for p in mfn.params]
-            ret_llvm = TYPES[mfn.ret_type]
-            fn_type = ir.FunctionType(ret_llvm, param_types)
-            ir_fn = ir.Function(module, fn_type, name=f"m_{node.name}_{mfn.name}")
-            self.ir_functions[f"{node.name}.{mfn.name}"] = ir_fn
-            self.fn_nodes[f"{node.name}.{mfn.name}"] = mfn
-        # Generate member function bodies
+        self._declare_struct_ir(node)
         for mfn in node.methods:
             self._gen_member_fn_body(node, mfn)
 
@@ -2014,20 +2237,90 @@ class CodeGenVisitor:
 
         return self.builder.call(ir_fn, coerced)
 
+    def visit_string_lit(self, node):
+        """Return pointer to the string's characters (for codegen)."""
+        text_bytes = node.value.encode('utf-8') + b'\0'
+        gv = _get_str_global(text_bytes, f"strlit_{len(_struct_str_globals)}")
+        return self.builder.gep(gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+
+    def _emit_print_struct(self, struct_node, ptr, is_top_level):
+        """Emit printf calls to print a struct value at ptr.
+        If is_top_level: ends with }\\n. Otherwise ends with } (no newline)."""
+        # Print "TypeName{"
+        open_text = (struct_node.name + "{").encode('utf-8') + b'\0'
+        open_gv = _get_str_global(open_text, f"stropen_{struct_node.name}_{len(_struct_str_globals)}")
+        open_ptr = self.builder.gep(open_gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        fmt_s_ptr = self.builder.gep(fmt_plain_str, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        self.builder.call(self.printf, [fmt_s_ptr, open_ptr])
+
+        # Print each field
+        for idx, f in enumerate(struct_node.fields):
+            if idx > 0:
+                # print ", "
+                sep_ptr = self.builder.gep(fmt_field_sep, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [sep_ptr])
+            # print "fieldname: "
+            label_text = (f.name + ": ").encode('utf-8') + b'\0'
+            label_gv = _get_str_global(label_text, f"strlabel_{struct_node.name}_{f.name}_{len(_struct_str_globals)}")
+            label_ptr = self.builder.gep(label_gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_s_ptr, label_ptr])
+            # get the field pointer
+            field_ptr = self.builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=f.name)
+            if f.type_name in self.struct_defs:
+                # nested struct
+                self._emit_print_struct(self.struct_defs[f.type_name], field_ptr, is_top_level=False)
+            elif f.type_name == "bool":
+                field_val = self.builder.load(field_ptr, name=f.name)
+                true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                str_ptr = self.builder.select(field_val, true_ptr, false_ptr)
+                self.builder.call(self.printf, [fmt_s_ptr, str_ptr])
+            elif f.type_name == "i64":
+                field_val = self.builder.load(field_ptr, name=f.name)
+                fmt_i64_ptr = self.builder.gep(fmt_field_i64, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_i64_ptr, field_val])
+            else:  # i32
+                field_val = self.builder.load(field_ptr, name=f.name)
+                fmt_int_ptr = self.builder.gep(fmt_field_int, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_int_ptr, field_val])
+
+        # Print closing "}" or "}\n"
+        if is_top_level:
+            close_ptr = self.builder.gep(fmt_struct_close, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [close_ptr])
+        else:
+            close_ptr = self.builder.gep(fmt_struct_close_inline, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [close_ptr])
+
     def visit_print(self, node):
-        """Emit printf call for print(expr)."""
-        val = node.arg.accept(self)
+        """Emit printf call for print(expr), print(string), or print(struct)."""
         have = node.arg.type
-        if have == "bool":
+        if isinstance(node.arg, StringLitNode):
+            # String literal: print text as-is followed by newline
+            str_ptr = node.arg.accept(self)
+            fmt_ptr = self.builder.gep(fmt_print_str, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        elif have in self.struct_defs:
+            # Struct: get pointer and emit struct printf sequence
+            ptr = self.get_lvalue_ptr(node.arg)
+            self._emit_print_struct(self.struct_defs[have], ptr, is_top_level=True)
+        elif have == "bool":
+            val = node.arg.accept(self)
             true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
             false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
             str_ptr = self.builder.select(val, true_ptr, false_ptr)
             fmt_ptr = self.builder.gep(fmt_print_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
             self.builder.call(self.printf, [fmt_ptr, str_ptr])
-        else:
-            val = self.coerce(val, have, "i64")
+        elif have == "i32":
+            val = node.arg.accept(self)
+            fmt_ptr = self.builder.gep(fmt_print_i32, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, val])
+        else:  # i64
+            val = node.arg.accept(self)
             fmt_ptr = self.builder.gep(fmt_print_int, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
             self.builder.call(self.printf, [fmt_ptr, val])
+
+
 
     def visit_binop(self, node):
         left_val = node.left.accept(self)
