@@ -53,4 +53,6 @@ term ::= factor { "*" factor }
 lambda ::= "fn" ident ":=" "[" [ capture_list ] "]"
            "(" [ param_list ] ")" "->" type NL block
 
-capture_list ::= ident { "," ident }
+capture_list ::= capture { "," capture }
+
+capture ::= [ "mut" ] ident

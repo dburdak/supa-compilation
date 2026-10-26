@@ -665,16 +665,21 @@ class LambdaNode(StmtNode):
             print(" " * indent + f"Lambda {self.name} -> {self.ret_type}")
             print(" " * (indent + 2) + f"Struct {struct_node.name}")
             for field in struct_node.fields:
+                mutability = "mut" if field.mutable else "const"
                 print(" " * (indent + 4) +
-                      f"Member {field.name} {field.type_name} const")
+                      f"Member {field.name} {field.type_name} {mutability}")
             struct_node.methods[0].dump(indent + 4)
+            mutability = "mut" if self.decl.mutable else "const"
             print(" " * (indent + 2) +
-                  f"Decl {self.decl.name} {self.decl.type_name} const")
+                  f"Decl {self.decl.name} {self.decl.type_name} {mutability}")
             for capture in self.capture_values:
                 capture.dump(indent + 4)
             return
 
-        capture_names = ", ".join(capture[0] for capture in self.captures)
+        capture_names = ", ".join(
+            f"{'mut ' if capture[2] else ''}{capture[0]}"
+            for capture in self.captures
+        )
         params = ", ".join(f"{p.type_name} {p.name}" for p in self.params)
         print(" " * indent +
               f"Lambda {self.name} [{capture_names}]({params}) -> {self.ret_type}")
@@ -895,8 +900,13 @@ class Parser:
         captures = []
         if self.peek() is not None and self.peek().kind != "rbracket":
             while True:
+                mutable = False
+                if (self.peek() is not None and self.peek().kind == "specifier"
+                        and self.peek().text == "mut"):
+                    self.eat()
+                    mutable = True
                 capture_tok = self.expect("ident", "capture name")
-                captures.append((capture_tok.text, capture_tok))
+                captures.append((capture_tok.text, capture_tok, mutable))
                 if self.peek() is not None and self.peek().kind == "comma":
                     self.eat()
                 else:
@@ -1431,6 +1441,7 @@ class SemanticChecker:
             node.exit.accept(self)
 
         # Pass 4: verify that all mutating member calls across the AST are valid
+        self._compute_all_mutating()
         self._check_all_mutating_calls()
 
     def _check_all_mutating_calls(self):
@@ -1771,7 +1782,7 @@ class SemanticChecker:
         seen = set()
         capture_fields = []
         capture_values = []
-        for name, token in node.captures:
+        for name, token, mutable in node.captures:
             if name in seen:
                 self._sem_err(token.line, token.col, f"'{name}' is captured twice")
             seen.add(name)
@@ -1788,7 +1799,7 @@ class SemanticChecker:
                     token.col,
                     f"cannot capture '{name}': no variable '{name}' is visible here",
                 )
-            field = FieldDef(token.line, token.col, decl.type_name, False, name)
+            field = FieldDef(token.line, token.col, decl.type_name, mutable, name)
             capture_fields.append(field)
             value = VarNode(token.line, token.col, name)
             value.decl = decl
@@ -1822,7 +1833,9 @@ class SemanticChecker:
         self._validate_type(node.ret_type, node.line, node.col)
         self._check_member_fn_body(struct_node, method)
 
-        decl = DeclNode(node.line, node.col, type_name, node.name, False, None)
+        decl_mutable = any(capture[2] for capture in node.captures)
+        decl = DeclNode(node.line, node.col, type_name, node.name,
+                        decl_mutable, None)
         decl.is_lambda = True
         self._declare(node.name, decl)
         node.generated_struct = struct_node

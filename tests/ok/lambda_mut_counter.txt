@@ -1,0 +1,9 @@
+i32 n{0}
+fn next := [mut n]() -> i32
+{
+n := n + 1
+exit n
+}
+print(next())
+print(next())
+exit n
