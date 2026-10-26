@@ -1772,8 +1772,8 @@ class SemanticChecker:
         if arg.type in self.lambda_types:
             arg_name = arg.name if isinstance(arg, VarNode) else "value"
             self._sem_err(
-                at_node.line,
-                at_node.col,
+                arg.line,
+                arg.col,
                 f"'{arg_name}' is a lambda and cannot be passed to '{callee_name}': "
                 "its type has no name, so no parameter can have it",
             )

@@ -1,1 +1,1 @@
-compilation error: line 9:6: 'times' is a lambda and cannot be passed to 'sq': its type has no name, so no parameter can have it
+compilation error: line 9:9: 'times' is a lambda and cannot be passed to 'sq': its type has no name, so no parameter can have it

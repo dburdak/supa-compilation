@@ -84,9 +84,12 @@ The AST dump uses indentation to represent the tree structure (each level adds 2
 - `If` -> children: condition expression, then_block, optional else_block
 - `Block` -> children: statements, optional exit
 - `While` -> children: condition expression, body_block
+- `Lambda` -> raw `--ast` shows the lambda statement and body; `--ast-checked` shows its generated closure struct, `call` member function, declaration, and captures
 - `BinOp {op}` -> children: left expression, right expression
 - `Not` -> child: operand expression
 - `FieldAccess {field}` -> child: object expression
+- `MemberCall {name}` -> children: receiver and arguments
+- `CallableCall {name}` -> children: arguments
 - `FnCall {name}` -> children: argument expressions
 - `Var {name}`
 - `Const {val}`
