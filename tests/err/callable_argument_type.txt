@@ -1,0 +1,10 @@
+struct Scale
+{
+i32 k
+fn call := (i32 v) -> i32
+{
+exit v * k
+}
+}
+Scale triple{3}
+exit triple(true)

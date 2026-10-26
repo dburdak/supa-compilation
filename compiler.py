@@ -392,6 +392,7 @@ class MemberCallNode(ExprNode):
         self.member_name = member_name  # str
         self.args = args                # list[ExprNode]
         self.mfn = None                 # resolved by SemanticChecker
+        self.callable_name = None
 
     def dump(self, indent=0):
         print(" " * indent + f"MemberCall {self.member_name}")
@@ -621,8 +622,12 @@ class FnCallNode(ExprNode):
         self.line, self.col = line, col
         self.name = name   # str
         self.args = args   # list[ExprNode]
+        self.rewritten_call = None
 
     def dump(self, indent=0):
+        if self.rewritten_call is not None:
+            self.rewritten_call.dump(indent)
+            return
         print(" " * indent + f"FnCall {self.name}")
         for a in self.args:
             a.dump(indent + 2)
@@ -1436,7 +1441,15 @@ class SemanticChecker:
         if expr is None:
             return False
         if isinstance(expr, FnCallNode):
-            if expr.name in method_names:
+            field = next((f for f in struct_node.fields if f.name == expr.name), None)
+            if field is not None and field.type_name in self.structs:
+                callable_fn = next(
+                    (m for m in self.structs[field.type_name].methods if m.name == "call"),
+                    None,
+                )
+                if callable_fn and getattr(callable_fn, "is_mutating", False):
+                    return True
+            elif expr.name in method_names:
                 mfn2 = next((m for m in struct_node.methods if m.name == expr.name), None)
                 if mfn2 and getattr(mfn2, 'is_mutating', False):
                     return True
@@ -1450,7 +1463,10 @@ class SemanticChecker:
                 fdef = next((f for f in struct_node.fields if f.name == root), None)
                 if fdef and fdef.type_name in self.structs:
                     target_sdef = self.structs[fdef.type_name]
-                    mfn2 = next((m for m in target_sdef.methods if m.name == expr.member_name), None)
+                    member_name = expr.member_name
+                    if any(f.name == member_name for f in target_sdef.fields):
+                        member_name = "call"
+                    mfn2 = next((m for m in target_sdef.methods if m.name == member_name), None)
                     if mfn2 and getattr(mfn2, 'is_mutating', False):
                         return True
             if self._expr_mutating(expr.target_node, field_names, method_names, struct_node):
@@ -1484,7 +1500,15 @@ class SemanticChecker:
                     if init_expr is not None and self._expr_mutating(init_expr, field_names, method_names, struct_node):
                         return True
             elif isinstance(stmt, FnCallNode):
-                if stmt.name in method_names:
+                field = next((f for f in struct_node.fields if f.name == stmt.name), None)
+                if field is not None and field.type_name in self.structs:
+                    callable_fn = next(
+                        (m for m in self.structs[field.type_name].methods if m.name == "call"),
+                        None,
+                    )
+                    if callable_fn and getattr(callable_fn, "is_mutating", False):
+                        return True
+                elif stmt.name in method_names:
                     mfn2 = next((m for m in struct_node.methods if m.name == stmt.name), None)
                     if mfn2 and getattr(mfn2, 'is_mutating', False):
                         return True
@@ -1547,7 +1571,27 @@ class SemanticChecker:
     def visit_member_call(self, node):
         """Type-check a member call site: resolve receiver type, find method, check args."""
         receiver_type = node.target_node.accept(self)
+        if node.callable_name is None and receiver_type in self.structs:
+            sdef = self.structs[receiver_type]
+            field = next((f for f in sdef.fields if f.name == node.member_name), None)
+            if field is not None:
+                node.target_node = FieldAccessNode(
+                    node.target_node.line,
+                    node.target_node.col,
+                    node.target_node,
+                    node.member_name,
+                )
+                node.callable_name = self._callable_target_name(node.target_node)
+                node.member_name = "call"
+                receiver_type = node.target_node.accept(self)
+
         if receiver_type not in self.structs:
+            if node.callable_name is not None:
+                self._sem_err(
+                    node.line,
+                    node.col,
+                    f"'{node.callable_name}' is not callable: it is {receiver_type}",
+                )
             self._sem_err(node.line, node.col,
                           f"type '{receiver_type}' is not a struct")
         sdef = self.structs[receiver_type]
@@ -1557,15 +1601,29 @@ class SemanticChecker:
                 mfn = m
                 break
         if mfn is None:
+            if node.callable_name is not None:
+                self._sem_err(
+                    node.line,
+                    node.col,
+                    f"'{node.callable_name}' is not callable: {receiver_type} has no member function 'call'",
+                )
             self._sem_err(node.line, node.col,
                           f"struct '{receiver_type}' has no member function '{node.member_name}'")
         if len(node.args) != len(mfn.params):
+            if node.callable_name is not None:
+                self._sem_err(
+                    node.line,
+                    node.col,
+                    f"callable object '{node.callable_name}' expects {len(mfn.params)} argument(s), got {len(node.args)}",
+                )
             self._sem_err(node.line, node.col,
                           f"member function '{node.member_name}' expects {len(mfn.params)} argument(s), got {len(node.args)}")
         for arg, param in zip(node.args, mfn.params):
             arg.accept(self)
             self._check_assignable(arg, param.type_name, node,
-                                   f"pass argument to '{param.name}'")
+                                   (f"pass argument to callable object '{node.callable_name}'"
+                                    if node.callable_name is not None
+                                    else f"pass argument to '{param.name}'"))
         node.mfn = mfn
         node.type = mfn.ret_type
         self.recorded_member_calls.append(node)
@@ -1574,6 +1632,13 @@ class SemanticChecker:
             self._check_receiver_mutable(node.target_node, node, mfn.name)
         return node.type
 
+    def _callable_target_name(self, expr):
+        if isinstance(expr, VarNode):
+            return expr.name
+        if isinstance(expr, FieldAccessNode):
+            return f"{self._callable_target_name(expr.obj)}.{expr.field_name}"
+        return "object"
+
     def _check_receiver_mutable(self, expr, call_node, method_name):
         """Ensure the receiver is a mutable variable (or mutable field chain)."""
         if isinstance(expr, VarNode):
@@ -1581,6 +1646,12 @@ class SemanticChecker:
             if decl is None:
                 return  # undeclared — already will have errored
             if not decl.mutable:
+                if call_node.callable_name is not None:
+                    self._sem_err(
+                        call_node.line,
+                        call_node.col,
+                        f"cannot call '{call_node.callable_name}': its 'call' changes it, and it is not mut",
+                    )
                 self._sem_err(call_node.line, call_node.col,
                               f"cannot call mutating method '{method_name}' on immutable '{expr.name}'")
         elif isinstance(expr, FieldAccessNode):
@@ -1591,6 +1662,12 @@ class SemanticChecker:
                 for f in sdef.fields:
                     if f.name == expr.field_name:
                         if not f.mutable:
+                            if call_node.callable_name is not None:
+                                self._sem_err(
+                                    call_node.line,
+                                    call_node.col,
+                                    f"cannot call '{call_node.callable_name}': its 'call' changes it, and it is not mut",
+                                )
                             self._sem_err(call_node.line, call_node.col,
                                           f"cannot call mutating method '{method_name}' on immutable field '{expr.field_name}'")
                         break
@@ -1744,6 +1821,33 @@ class SemanticChecker:
         node.body.accept(self)
 
     def visit_fn_call(self, node):
+        decl = self._lookup(node.name)
+        if decl is not None:
+            is_function = (
+                (self.current_struct is not None and any(
+                    m.name == node.name for m in self.current_struct.methods
+                ))
+                or node.name in self.functions
+                or node.name == "read"
+            )
+            if is_function:
+                self._sem_err(
+                    node.line,
+                    node.col,
+                    f"'{node.name}' is both a variable and a function: rename one of them",
+                )
+            target = VarNode(node.line, node.col, node.name)
+            node.rewritten_call = MemberCallNode(
+                node.line,
+                node.col,
+                target,
+                "call",
+                node.args,
+            )
+            node.rewritten_call.callable_name = node.name
+            node.type = node.rewritten_call.accept(self)
+            return node.type
+
         # Inside a member function: first look among the struct's own methods
         if self.current_struct is not None:
             mfn = next((m for m in self.current_struct.methods if m.name == node.name), None)
@@ -2203,6 +2307,8 @@ class CodeGenVisitor:
         self.builder.position_at_end(end_bb)
 
     def visit_fn_call(self, node):
+        if node.rewritten_call is not None:
+            return node.rewritten_call.accept(self)
         # Self-method call (inside a member function, calling another method on self)
         if getattr(node, 'self_method', None) is not None:
             mfn = node.self_method
