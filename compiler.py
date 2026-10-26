@@ -41,6 +41,86 @@ fmt_false = ir.GlobalVariable(module, ir.ArrayType(I8, len(false_str)), name="fa
 fmt_false.linkage, fmt_false.global_constant = "private", True
 fmt_false.initializer = ir.Constant(ir.ArrayType(I8, len(false_str)), bytearray(false_str))
 
+# print() format strings
+print_int_text = b"%lld\n\0"
+fmt_print_int = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_int_text)), name="fmt_print_int")
+fmt_print_int.linkage, fmt_print_int.global_constant = "private", True
+fmt_print_int.initializer = ir.Constant(ir.ArrayType(I8, len(print_int_text)), bytearray(print_int_text))
+
+print_bool_text = b"%s\n\0"
+fmt_print_bool = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_bool_text)), name="fmt_print_bool")
+fmt_print_bool.linkage, fmt_print_bool.global_constant = "private", True
+fmt_print_bool.initializer = ir.Constant(ir.ArrayType(I8, len(print_bool_text)), bytearray(print_bool_text))
+
+# scanf for read()
+scanf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="scanf")
+scan_fmt_text = b"%d\0"
+fmt_scan = ir.GlobalVariable(module, ir.ArrayType(I8, len(scan_fmt_text)), name="fmt_scan")
+fmt_scan.linkage, fmt_scan.global_constant = "private", True
+fmt_scan.initializer = ir.Constant(ir.ArrayType(I8, len(scan_fmt_text)), bytearray(scan_fmt_text))
+
+# additional format strings for print() of i32, strings, struct fields
+print_i32_text = b"%d\n\0"
+fmt_print_i32 = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_i32_text)), name="fmt_print_i32")
+fmt_print_i32.linkage, fmt_print_i32.global_constant = "private", True
+fmt_print_i32.initializer = ir.Constant(ir.ArrayType(I8, len(print_i32_text)), bytearray(print_i32_text))
+
+print_str_text = b"%s\n\0"
+fmt_print_str = ir.GlobalVariable(module, ir.ArrayType(I8, len(print_str_text)), name="fmt_print_str")
+fmt_print_str.linkage, fmt_print_str.global_constant = "private", True
+fmt_print_str.initializer = ir.Constant(ir.ArrayType(I8, len(print_str_text)), bytearray(print_str_text))
+
+# struct field separator formats (no newline)
+field_sep_text = b", \0"
+fmt_field_sep = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_sep_text)), name="fmt_field_sep")
+fmt_field_sep.linkage, fmt_field_sep.global_constant = "private", True
+fmt_field_sep.initializer = ir.Constant(ir.ArrayType(I8, len(field_sep_text)), bytearray(field_sep_text))
+
+# "%s" for inline struct printing (no newline, for struct field labels)
+plain_str_text = b"%s\0"
+fmt_plain_str = ir.GlobalVariable(module, ir.ArrayType(I8, len(plain_str_text)), name="fmt_plain_str")
+fmt_plain_str.linkage, fmt_plain_str.global_constant = "private", True
+fmt_plain_str.initializer = ir.Constant(ir.ArrayType(I8, len(plain_str_text)), bytearray(plain_str_text))
+
+# "%d" inline (no newline) for struct field int printing
+field_int_text = b"%d\0"
+fmt_field_int = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_int_text)), name="fmt_field_int")
+fmt_field_int.linkage, fmt_field_int.global_constant = "private", True
+fmt_field_int.initializer = ir.Constant(ir.ArrayType(I8, len(field_int_text)), bytearray(field_int_text))
+
+# "%lld" inline (no newline) for struct field i64 printing
+field_i64_text = b"%lld\0"
+fmt_field_i64 = ir.GlobalVariable(module, ir.ArrayType(I8, len(field_i64_text)), name="fmt_field_i64")
+fmt_field_i64.linkage, fmt_field_i64.global_constant = "private", True
+fmt_field_i64.initializer = ir.Constant(ir.ArrayType(I8, len(field_i64_text)), bytearray(field_i64_text))
+
+# closing "}\n" for struct printing
+struct_close_text = b"}\n\0"
+fmt_struct_close = ir.GlobalVariable(module, ir.ArrayType(I8, len(struct_close_text)), name="fmt_struct_close")
+fmt_struct_close.linkage, fmt_struct_close.global_constant = "private", True
+fmt_struct_close.initializer = ir.Constant(ir.ArrayType(I8, len(struct_close_text)), bytearray(struct_close_text))
+
+# "}" inline (no newline) for nested struct printing
+struct_close_inline_text = b"}\0"
+fmt_struct_close_inline = ir.GlobalVariable(module, ir.ArrayType(I8, len(struct_close_inline_text)), name="fmt_struct_close_inline")
+fmt_struct_close_inline.linkage, fmt_struct_close_inline.global_constant = "private", True
+fmt_struct_close_inline.initializer = ir.Constant(ir.ArrayType(I8, len(struct_close_inline_text)), bytearray(struct_close_inline_text))
+
+# Cached global string constants for struct printing (created on demand)
+_struct_str_globals = {}
+
+def _get_str_global(text_bytes, name_hint):
+    """Get or create a global constant for the given bytes string."""
+    key = text_bytes
+    if key not in _struct_str_globals:
+        gv = ir.GlobalVariable(module, ir.ArrayType(I8, len(text_bytes)), name=name_hint)
+        gv.linkage, gv.global_constant = "private", True
+        gv.initializer = ir.Constant(ir.ArrayType(I8, len(text_bytes)), bytearray(text_bytes))
+        _struct_str_globals[key] = gv
+    return _struct_str_globals[key]
+
+
+
 TYPES = {
     "i32": I32,
     "i64": I64,
@@ -55,9 +135,13 @@ KEYWORDS = {
     "false": "bool_literal",
     "mut": "specifier",
     "exit": "statement",
+    "struct": "keyword",
+    "fn": "keyword",
     "if": "keyword",
     "else": "keyword",
     "while": "keyword",
+    "print": "keyword",
+
 }
 
 def raise_err(error_number, err_line, column, ue_part=""):
@@ -111,7 +195,7 @@ def is_digit(b):
     return False
 
 def is_operator(b):
-    if ord("*") == b or ord("+") == b or ord("-") == b:
+    if ord("*") == b or ord("+") == b:
         return True
     return False
 
@@ -141,6 +225,18 @@ def lex(data: bytes):
                 tokens.append(Token("lbrace", "{", line, col))
             elif b == ord("}"):
                 tokens.append(Token("rbrace", "}", line, col))
+                open_brace_col = None
+            elif b == ord("("):
+                tokens.append(Token("lparen", "(", line, col))
+            elif b == ord(")"):
+                tokens.append(Token("rparen", ")", line, col))
+            elif b == ord(","):
+                tokens.append(Token("comma", ",", line, col))
+            elif b == ord("."):
+                tokens.append(Token("dot", ".", line, col))
+            elif b == ord("-"):
+                state = "MINUS"
+                start_col = col
             elif b == ord(":"):
                 state = "ASSIGN"
                 start_col = col
@@ -149,6 +245,15 @@ def lex(data: bytes):
                 start_col = col
             elif b == ord("="):
                 state = "EQUAL"
+                start_col = col
+            elif b == ord('#'):
+                # comment: skip rest of line
+                while i < len(data) and data[i] != 10:
+                    i += 1
+                continue
+            elif b == ord('"'):
+                state = "STRING"
+                start = i + 1  # content starts after opening quote
                 start_col = col
             elif is_operator(b):
                 tokens.append(Token("operator", chr(b), line, col))
@@ -201,6 +306,26 @@ def lex(data: bytes):
                 state = "START"
                 continue
 
+        elif state == "MINUS":
+            if b == ord(">"):
+                tokens.append(Token("arrow", "->", line, start_col))
+                state = "START"
+            else:
+                tokens.append(Token("operator", "-", line, start_col))
+                state = "START"
+                continue
+
+        elif state == "STRING":
+            if b is None or b == 10:
+                # unclosed string literal
+                raise_syntax_err(line, start_col, "unclosed string literal")
+            elif b == ord('"'):
+                # closing quote — emit the token with the text between quotes
+                text_val = data[start:i].decode('utf-8', errors='replace')
+                tokens.append(Token("string_lit", text_val, line, start_col))
+                state = "START"
+            # else: still inside the string, keep scanning
+
         i += 1
         col += 1
 
@@ -233,33 +358,169 @@ class StmtNode(Node):
 class ExprNode(Node):
     pass
 
+class FieldDef:
+    def __init__(self, line: int, col: int, type_name: str, mutable: bool, name: str):
+        self.line = line
+        self.col = col
+        self.type_name = type_name
+        self.mutable = mutable
+        self.name = name
+
+
+class MemberFnDeclNode(StmtNode):
+    def __init__(self, line, col, name, params, ret_type, body):
+        self.line, self.col = line, col
+        self.name = name          # str
+        self.params = params      # list[Param]
+        self.ret_type = ret_type  # str
+        self.body = body          # BlockNode
+
+    def dump(self, indent=0):
+        print(" " * indent + f"MemberFn {self.name} -> {self.ret_type}")
+        for p in self.params:
+            print(" " * (indent + 2) + f"Param {p.name} {p.type_name}")
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_decl(self)
+
+
+class MemberCallNode(ExprNode):
+    def __init__(self, line, col, target_node, member_name, args):
+        self.line, self.col = line, col
+        self.target_node = target_node  # VarNode or FieldAccessNode
+        self.member_name = member_name  # str
+        self.args = args                # list[ExprNode]
+        self.mfn = None                 # resolved by SemanticChecker
+
+    def dump(self, indent=0):
+        print(" " * indent + f"MemberCall {self.member_name}")
+        self.target_node.dump(indent + 2)
+        for a in self.args:
+            a.dump(indent + 2)
+
+    def accept(self, visitor):
+        if hasattr(visitor, "visit_member_call"):
+            return visitor.visit_member_call(self)
+        return None
+
+
+class StringLitNode(ExprNode):
+    """AST node for string literals in print(\"...\")."""
+    def __init__(self, line, col, value):
+        self.line, self.col = line, col
+        self.value = value  # str
+        self.type = "string"
+
+    def dump(self, indent=0):
+        print(" " * indent + f'StringLit "{self.value}"')
+
+    def accept(self, visitor):
+        if hasattr(visitor, 'visit_string_lit'):
+            return visitor.visit_string_lit(self)
+        return "string"
+
+
+class PrintNode(StmtNode):
+    """AST node for: print(expr) or print(\"literal\")"""
+    def __init__(self, line, col, arg):
+        self.line, self.col = line, col
+        self.arg = arg   # ExprNode or StringLitNode
+
+    def dump(self, indent=0):
+        print(" " * indent + "Print")
+        self.arg.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_print(self)
+
+
+class StructDefNode(StmtNode):
+    def __init__(self, line: int, col: int, name: str, fields: list, methods: list = None):
+        self.line = line
+        self.col = col
+        self.name = name
+        self.fields = fields
+        self.methods = methods if methods is not None else []
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Struct {self.name}")
+        for f in self.fields:
+            kind = "mut" if f.mutable else "const"
+            print(" " * (indent + 2) + f"Member {f.name} {f.type_name} {kind}")
+        for m in self.methods:
+            m.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_struct_def(self)
+
+
 class DeclNode(StmtNode):
-    def __init__(self, line, col, type_name: str, name: str, mutable: bool, init):
+    def __init__(self, line, col, type_name: str, name: str, mutable: bool, init, inits=None):
         self.line, self.col = line, col
         self.type_name = type_name
         self.name = name
         self.mutable = mutable
         self.init = init
+        self.inits = inits if inits is not None else ([init] if not isinstance(init, list) else init)
 
     def dump(self, indent=0):
         kind = "mut" if self.mutable else "const"
         print(" " * indent + f"Decl {self.name} {self.type_name} {kind}")
-        self.init.dump(indent + 2)
+        if isinstance(self.init, list):
+            for e in self.init:
+                e.dump(indent + 2)
+        else:
+            self.init.dump(indent + 2)
 
     def accept(self, visitor):
         return visitor.visit_decl(self)
 
 
-class AssignNode(StmtNode):
-    def __init__(self, line, col, name, value):
-        self.line, self.col, self.name, self.value = line, col, name, value
+class StructInitNode(ExprNode):
+    def __init__(self, line, col, inits):
+        self.line, self.col = line, col
+        self.inits = inits
 
     def dump(self, indent=0):
-        print(" " * indent + f"Assign {self.name}")
+        print(" " * indent + "StructInit")
+        for e in self.inits:
+            e.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_struct_init(self)
+
+
+class FieldAccessNode(ExprNode):
+    def __init__(self, line, col, obj, field_name):
+        self.line, self.col = line, col
+        self.obj = obj
+        self.field_name = field_name
+        self.field_index = None
+
+    def dump(self, indent=0):
+        print(" " * indent + f"FieldAccess {self.field_name}")
+        self.obj.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_field_access(self)
+
+
+class AssignNode(StmtNode):
+    def __init__(self, line, col, name, value, field_chain=None):
+        self.line, self.col = line, col
+        self.name = name
+        self.value = value
+        self.field_chain = field_chain if field_chain is not None else []
+        self.full_name = name + ("." + ".".join(self.field_chain) if self.field_chain else "")
+
+    def dump(self, indent=0):
+        print(" " * indent + f"Assign {self.full_name}")
         self.value.dump(indent + 2)
 
     def accept(self, visitor):
         return visitor.visit_assign(self)
+
 
 
 class BinOpNode(ExprNode):
@@ -321,56 +582,6 @@ class NotNode(ExprNode):
         return visitor.visit_not(self)
 
 
-class BlockNode(Node):
-    def __init__(self, line, col, stmts, exit_node = None):
-        self.line, self.col = line, col
-        self.stmts = stmts
-        self.exit = exit_node
-
-    def dump(self, indent=0):
-        print(" " * indent + "Block")
-        for s in self.stmts:
-            s.dump(indent + 2)
-        if self.exit:
-            self.exit.dump(indent + 2)
-
-    def accept(self, visitor):
-        return visitor.visit_block(self)
-
-
-class IfNode(StmtNode):
-    def __init__(self, line, col, condition, then_block, else_block = None):
-        self.line, self.col = line, col
-        self.condition = condition
-        self.then_block = then_block
-        self.else_block = else_block
-
-    def dump(self, indent=0):
-        print(" " * indent + "If")
-        self.condition.dump(indent + 2)
-        self.then_block.dump(indent + 2)
-        if self.else_block:
-            self.else_block.dump(indent + 2)
-
-    def accept(self, visitor):
-        return visitor.visit_if(self)
-
-
-class WhileNode(StmtNode):
-    def __init__(self, line, col, condition, body_block):
-        self.line, self.col = line, col
-        self.condition = condition
-        self.body_block = body_block
-
-    def dump(self, indent=0):
-        print(" " * indent + "While")
-        self.condition.dump(indent + 2)
-        self.body_block.dump(indent + 2)
-
-    def accept(self, visitor):
-        return visitor.visit_while(self)
-
-
 class ExitNode(Node):
     def __init__(self, line, col, val):
         self.line, self.col, self.val = line, col, val
@@ -382,6 +593,93 @@ class ExitNode(Node):
     def accept(self, visitor):
         return visitor.visit_exit(self)
 
+
+class Param:
+    def __init__(self, line, col, type_name, name):
+        self.line, self.col, self.type_name, self.name = line, col, type_name, name
+
+
+class FnDeclNode(StmtNode):
+    def __init__(self, line, col, name, params, ret_type, body):
+        self.line, self.col = line, col
+        self.name = name          # str
+        self.params = params      # list[Param]
+        self.ret_type = ret_type  # str
+        self.body = body          # BlockNode
+
+    def dump(self, indent=0):
+        params_str = ", ".join(f"{p.type_name} {p.name}" for p in self.params)
+        print(" " * indent + f"FnDecl {self.name}({params_str}) -> {self.ret_type}")
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_decl(self)
+
+
+class FnCallNode(ExprNode):
+    def __init__(self, line, col, name, args):
+        self.line, self.col = line, col
+        self.name = name   # str
+        self.args = args   # list[ExprNode]
+
+    def dump(self, indent=0):
+        print(" " * indent + f"FnCall {self.name}")
+        for a in self.args:
+            a.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_fn_call(self)
+
+
+class BlockNode(Node):
+    """A block: { NL stmts exit NL } — used inside functions and if/while."""
+    def __init__(self, line, col, stmts, exit_node = None):
+        self.line, self.col = line, col
+        self.stmts = stmts          # list of statement nodes
+        self.exit_node = exit_node  # ExitNode or None
+
+    def dump(self, indent=0):
+        print(" " * indent + "Block")
+        for s in self.stmts:
+            s.dump(indent + 2)
+        if self.exit_node:
+            self.exit_node.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_block(self)
+
+
+class IfNode(StmtNode):
+    def __init__(self, line, col, cond, then_block, else_block = None):
+        self.line, self.col = line, col
+        self.cond = cond               # ExprNode
+        self.then_block = then_block   # BlockNode
+        self.else_block = else_block   # BlockNode or None
+
+    def dump(self, indent=0):
+        print(" " * indent + "If")
+        self.cond.dump(indent + 2)
+        self.then_block.dump(indent + 2)
+        if self.else_block:
+            self.else_block.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_if(self)
+
+
+class WhileNode(StmtNode):
+    def __init__(self, line, col, cond, body):
+        self.line, self.col = line, col
+        self.cond = cond   # ExprNode
+        self.body = body   # BlockNode
+
+    def dump(self, indent=0):
+        print(" " * indent + "While")
+        self.cond.dump(indent + 2)
+        self.body.dump(indent + 2)
+
+    def accept(self, visitor):
+        return visitor.visit_while(self)
 
 
 
@@ -443,9 +741,22 @@ class Parser:
     # ── top-level ──────────────────────────────────────────────────────
     def parse_program(self):
         stmts = []
+        current_phase = "struct"
         while self.peek_line() is not None and not (
             self.peek_line()[0].kind == "statement" and self.peek_line()[0].text == "exit"
         ):
+            line_toks = self.peek_line()
+            first_tok = line_toks[0] if line_toks else None
+            if first_tok and first_tok.kind == "keyword" and first_tok.text == "struct":
+                if current_phase != "struct":
+                    raise_syntax_err(first_tok.line, first_tok.col, "struct definitions must come before functions and statements")
+            elif first_tok and first_tok.kind == "keyword" and first_tok.text == "fn":
+                if current_phase == "stmt":
+                    raise_syntax_err(first_tok.line, first_tok.col, "function declarations must come before statements")
+                current_phase = "fn"
+            else:
+                current_phase = "stmt"
+
             self.next_line()
             stmt_node = self.parse_statement()
             stmts.append(stmt_node)
@@ -471,25 +782,136 @@ class Parser:
         first_col  = stmts[0].col  if stmts else (exit_node.col  if exit_node else 1)
         return ProgramNode(first_line, first_col, stmts, exit_node)
 
-    def parse_statement(self):
+    def parse_statement(self, is_top_level=True, inside_fn=False):
         tok = self.peek()
         if tok is None:
             line, col = self.get_pos_info()
             raise_syntax_err(line, col, "expected statement, found end of line")
 
-        if tok.kind == "typename":
+        if tok.kind == "keyword" and tok.text == "struct":
+            if not is_top_level:
+                raise_syntax_err(tok.line, tok.col, "struct declaration not allowed inside a function body")
+            return self.parse_struct_def()
+        elif tok.kind == "keyword" and tok.text == "fn":
+            if not is_top_level:
+                raise_syntax_err(tok.line, tok.col, "function declaration not allowed inside a function body")
+            return self.parse_fn_decl()
+        elif tok.kind == "keyword" and tok.text == "if":
+            return self.parse_if(inside_fn=inside_fn)
+        elif tok.kind == "keyword" and tok.text == "while":
+            return self.parse_while(inside_fn=inside_fn)
+        elif tok.kind == "keyword" and tok.text == "print":
+            return self.parse_print()
+        elif tok.kind == "typename":
             return self.parse_decl()
         elif tok.kind == "ident":
+            if self.pos + 1 < len(self.toks):
+                next_tok = self.toks[self.pos + 1]
+                if next_tok.kind == "specifier" and next_tok.text == "mut":
+                    return self.parse_decl()
+                if next_tok.kind == "ident":
+                    return self.parse_decl()
+                if next_tok.kind == "lparen":
+                    return self.parse_fn_call()  # bare fn-call statement (result discarded)
             return self.parse_assignment()
-        elif tok.kind == "keyword" and tok.text == "if":
-            return self.parse_if()
-        elif tok.kind == "keyword" and tok.text == "while":
-            return self.parse_while()
         else:
             raise_syntax_err(tok.line, tok.col, f"cannot start a statement with '{tok.text}'")
 
+    def parse_struct_def(self):
+        struct_tok = self.eat()  # "struct"
+        name_tok = self.expect("ident", "struct name")
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after struct name")
+
+        nxt = self.peek_line()
+        if nxt is None:
+            raise_syntax_err(name_tok.line, name_tok.col, "expected '{', found end of file")
+        if len(nxt) != 1 or nxt[0].kind != "lbrace":
+            raise_syntax_err(nxt[0].line, nxt[0].col, f"expected '{{', got '{nxt[0].text}'")
+        self.next_line()
+        lbrace_tok = self.eat()
+
+        fields = []
+        field_names = set()
+        # Phase 1: parse fields (stop when we see 'fn' or '}')
+        while True:
+            nxt = self.peek_line()
+            if nxt is None:
+                raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct body opened here is never closed")
+            if len(nxt) == 1 and nxt[0].kind == "rbrace":
+                break  # will be consumed after method phase
+            # Stop field loop if the next line starts with 'fn'
+            if nxt[0].kind == "keyword" and nxt[0].text == "fn":
+                break
+
+            self.next_line()
+            type_tok = self.peek()
+            if type_tok is None:
+                line, col = self.get_pos_info()
+                raise_syntax_err(line, col, "expected field declaration, found end of line")
+            if type_tok.kind not in ("typename", "ident"):
+                raise_syntax_err(type_tok.line, type_tok.col, f"expected field type, got '{type_tok.text}'")
+            self.eat()
+
+            mutable = False
+            tok = self.peek()
+            if tok is not None and tok.kind == "specifier" and tok.text == "mut":
+                self.eat()
+                mutable = True
+
+            fname_tok = self.expect("ident", "field name")
+            if fname_tok.text in field_names:
+                raise_err(1, fname_tok.line, fname_tok.col, ue_part=f"'{fname_tok.text}'")
+            field_names.add(fname_tok.text)
+
+            if self.peek() is not None:
+                leftover = self.peek()
+                raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after field declaration")
+
+            fields.append(FieldDef(type_tok.line, type_tok.col, type_tok.text, mutable, fname_tok.text))
+
+        if not fields:
+            # Report error at the fn token, not the struct brace
+            nxt = self.peek_line()
+            if nxt is not None and nxt[0].kind == "keyword" and nxt[0].text == "fn":
+                fn_tok = nxt[0]
+                raise_syntax_err(fn_tok.line, fn_tok.col, "member function before first field")
+            raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct must have at least one field (member function before first field)")
+
+        # Phase 2: parse member functions (stop at '}')
+        methods = []
+        method_names = set(field_names.copy())
+        while True:
+            nxt = self.peek_line()
+            if nxt is None:
+                raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "struct body opened here is never closed")
+            if len(nxt) == 1 and nxt[0].kind == "rbrace":
+                self.next_line()
+                self.eat()  # '}'
+                break
+            if not (nxt[0].kind == "keyword" and nxt[0].text == "fn"):
+                raise_syntax_err(nxt[0].line, nxt[0].col,
+                                  f"expected 'fn' or '}}', got '{nxt[0].text}' (field declaration after member function)")
+            self.next_line()
+            mfn = self.parse_member_fn_decl(method_names)
+            methods.append(mfn)
+
+        return StructDefNode(struct_tok.line, struct_tok.col, name_tok.text, fields, methods)
+
+    def parse_init_expr(self):
+        if self.peek() is not None and self.peek().kind == "lbrace":
+            lb = self.eat()
+            nested = [self.parse_init_expr()]
+            while self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+                nested.append(self.parse_init_expr())
+            self.expect("rbrace", "'}'")
+            return StructInitNode(lb.line, lb.col, nested)
+        return self.parse_expr()
+
     def parse_decl(self):
-        type_tok = self.eat()  # "i32" | "i64" | "bool"
+        type_tok = self.eat()  # "i32" | "i64" | "bool" | struct name ident
         type_name = type_tok.text
         mutable = False
 
@@ -501,27 +923,209 @@ class Parser:
         name_tok = self.expect("ident", "variable name")
         self.expect("lbrace", "'{'")
 
-        init = self.parse_expr()
+        inits = [self.parse_init_expr()]
+        while (tok := self.peek()) is not None and tok.kind == "comma":
+            self.eat()
+            inits.append(self.parse_init_expr())
 
         self.expect("rbrace", "'}'")
 
-        return DeclNode(name_tok.line, name_tok.col, type_name, name_tok.text, mutable, init)
+        init_val = inits[0] if len(inits) == 1 else inits
+        return DeclNode(name_tok.line, name_tok.col, type_name, name_tok.text, mutable, init_val, inits=inits)
 
     def parse_assignment(self):
         var_tok = self.eat()  # ident
+        field_chain = []
+        while self.peek() is not None and self.peek().kind == "dot":
+            self.eat()
+            f_tok = self.expect("ident", "field name")
+            field_chain.append(f_tok.text)
         self.expect("assignment", "':='")
         value = self.parse_expr()
-        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value)
+        return AssignNode(var_tok.line, var_tok.col, var_tok.text, value, field_chain=field_chain)
 
     def parse_exit(self):
         exit_tok = self.eat()  # "exit"
-        val = self.parse_operand(is_exit=True)
+        # If nothing follows on the same line, raise "unparsable exit statement"
+        tok = self.peek()
+        if tok is None:
+            raise_err(7, exit_tok.line, exit_tok.col + len(exit_tok.text))
+        val = self.parse_expr()
         return ExitNode(exit_tok.line, exit_tok.col, val)
+
+    def parse_fn_decl(self):
+        fn_tok = self.eat()  # "fn"
+        name_tok = self.expect("ident", "function name")
+        self.expect("assignment", "':='")
+        self.expect("lparen", "'('")
+
+        params = []
+        param_names = set()
+        if self.peek() is not None and self.peek().kind != "rparen":
+            params = self.parse_param_list(param_names)
+
+        self.expect("rparen", "')'")
+        self.expect("arrow", "'->'")
+
+        ret_tok = self.peek()
+        if ret_tok is None or ret_tok.kind not in ("typename", "ident"):
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, "expected return type")
+        self.eat()
+
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after function signature")
+
+        body = self.parse_block(inside_fn=True, requires_exit=True)
+        return FnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
+
+    def parse_member_fn_decl(self, known_names):
+        """Parse: fn ident := ( [param_list] ) -> type NL block"""
+        fn_tok = self.eat()  # "fn"
+        name_tok = self.expect("ident", "member function name")
+        if name_tok.text in known_names:
+            raise_err(1, name_tok.line, name_tok.col, ue_part=f"'{name_tok.text}'")
+        known_names.add(name_tok.text)
+        self.expect("assignment", "':='")
+        self.expect("lparen", "'('")
+
+        params = []
+        param_names = set()
+        if self.peek() is not None and self.peek().kind != "rparen":
+            params = self.parse_param_list(param_names)
+
+        self.expect("rparen", "')'")
+        self.expect("arrow", "'->'")
+
+        ret_tok = self.peek()
+        if ret_tok is None or ret_tok.kind not in ("typename", "ident"):
+            line, col = self.get_pos_info()
+            raise_syntax_err(line, col, "expected return type")
+        self.eat()
+
+        if self.peek() is not None:
+            leftover = self.peek()
+            raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after member function signature")
+
+        body = self.parse_block(inside_fn=True, requires_exit=True)
+        return MemberFnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
+
+    def parse_param_list(self, param_names):
+        params = []
+        while True:
+            type_tok = self.peek()
+            if type_tok is None or type_tok.kind not in ("typename", "ident"):
+                line, col = self.get_pos_info()
+                raise_syntax_err(line, col, "expected parameter type")
+            self.eat()
+            name_tok = self.expect("ident", "parameter name")
+            if name_tok.text in param_names:
+                raise_err(1, name_tok.line, name_tok.col, ue_part=f"'{name_tok.text}'")
+            param_names.add(name_tok.text)
+            params.append(Param(type_tok.line, type_tok.col, type_tok.text, name_tok.text))
+            if self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+            else:
+                break
+        return params
+
+    def parse_block(self, inside_fn=False, requires_exit=False):
+        """Parse: '{' NL { statement } [ exit NL ] '}' NL
+        requires_exit=True means the block MUST end with exit (fn body).
+        inside_fn means we're inside a fn body (affects nested decls).
+        """
+        nxt = self.peek_line()
+        if nxt is None:
+            raise_syntax_err(0, 0, "expected '{', found end of file")
+        if len(nxt) != 1 or nxt[0].kind != "lbrace":
+            raise_syntax_err(nxt[0].line, nxt[0].col, f"expected '{{', got '{nxt[0].text}'")
+        self.next_line()
+        lbrace_tok = self.eat()
+
+        stmts = []
+        exit_node = None
+        has_exit = False
+
+        while True:
+            nxt = self.peek_line()
+            if nxt is None:
+                raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block opened here is never closed")
+            if len(nxt) == 1 and nxt[0].kind == "rbrace":
+                self.next_line()
+                self.eat()  # '}'
+                break
+
+            self.next_line()
+            tok = self.peek()
+
+            if tok is None:
+                continue
+
+            if tok.kind == "statement" and tok.text == "exit":
+                if has_exit:
+                    raise_err(6, tok.line, tok.col)
+                exit_node = self.parse_exit()
+                has_exit = True
+                # check nothing follows exit on the same line
+                if self.peek() is not None:
+                    leftover = self.peek()
+                    raise_err(7, leftover.line, leftover.col)
+                # next must be '}'
+                nxt2 = self.peek_line()
+                if nxt2 is None or not (len(nxt2) == 1 and nxt2[0].kind == "rbrace"):
+                    if nxt2 is not None:
+                        raise_err(6, nxt2[0].line, nxt2[0].col)
+                    else:
+                        raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block opened here is never closed")
+                self.next_line()
+                self.eat()  # '}'
+                break
+            else:
+                if has_exit:
+                    raise_err(6, tok.line, tok.col)
+                stmt = self.parse_statement(is_top_level=False, inside_fn=inside_fn)
+                stmts.append(stmt)
+                if self.peek() is not None:
+                    leftover = self.peek()
+                    raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after statement")
+
+        if not stmts and exit_node is None:
+            raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block must not be empty")
+
+        if requires_exit and not has_exit:
+            raise_err(5, lbrace_tok.line, lbrace_tok.col)
+
+        return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node)
+
+    def parse_if(self, inside_fn=False):
+        if_tok = self.eat()  # "if"
+        cond = self.parse_expr()
+        self.expect_eol()
+        then_block = self.parse_block(inside_fn=inside_fn, requires_exit=False)
+
+        # check for else
+        nxt = self.peek_line()
+        else_block = None
+        if nxt is not None and len(nxt) == 1 and nxt[0].kind == "keyword" and nxt[0].text == "else":
+            self.next_line()
+            self.eat()  # "else"
+            self.expect_eol()
+            else_block = self.parse_block(inside_fn=inside_fn, requires_exit=False)
+
+        return IfNode(if_tok.line, if_tok.col, cond, then_block, else_block)
+
+    def parse_while(self, inside_fn=False):
+        while_tok = self.eat()  # "while"
+        cond = self.parse_expr()
+        self.expect_eol()
+        body = self.parse_block(inside_fn=inside_fn, requires_exit=False)
+        return WhileNode(while_tok.line, while_tok.col, cond, body)
 
     def parse_arith(self):
         # arith ::= term { ("+" | "-") term }
         node = self.parse_term()
-        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in "+-":
+        while (tok := self.peek()) is not None and tok.kind == "operator" and tok.text in ("+", "-"):
             op_tok = self.eat()
             node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_term())
         return node
@@ -534,7 +1138,7 @@ class Parser:
             node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, self.parse_operand())
         return node
 
-    def parse_expr(self):
+    def parse_expr(self, is_exit=False):
         # expr ::= arith [ ("==" | "!=") arith ]
         node = self.parse_arith()
         if (tok := self.peek()) is not None and tok.kind == "comparison":
@@ -546,7 +1150,7 @@ class Parser:
         return node
 
     def parse_operand(self, is_exit=False):
-        # operand ::= ident | constant | "true" | "false"
+        # factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor
         tok = self.peek()
 
         if tok is None:
@@ -561,8 +1165,31 @@ class Parser:
             operand = self.parse_operand(is_exit=is_exit)
             return NotNode(bang.line, bang.col, operand)
         elif tok.kind == "ident":
-            self.eat()
-            return VarNode(tok.line, tok.col, tok.text)
+            # Peek ahead: if next token is '(', it's a plain function call
+            if self.pos + 1 < len(self.toks) and self.toks[self.pos + 1].kind == "lparen":
+                node = self.parse_fn_call()
+                return node
+            else:
+                self.eat()
+                node = VarNode(tok.line, tok.col, tok.text)
+            while self.peek() is not None and self.peek().kind == "dot":
+                dot_tok = self.eat()  # consume '.'
+                f_tok = self.expect("ident", "field or method name")
+                # Check what follows: '(' means member call
+                if self.peek() is not None and self.peek().kind == "lparen":
+                    self.eat()  # consume '('
+                    args = []
+                    if self.peek() is not None and self.peek().kind != "rparen":
+                        args.append(self.parse_expr())
+                        while self.peek() is not None and self.peek().kind == "comma":
+                            self.eat()
+                            args.append(self.parse_expr())
+                    self.expect("rparen", "')'")
+                    node = MemberCallNode(node.line, node.col, node, f_tok.text, args)
+                    break  # member call ends the chain
+                else:
+                    node = FieldAccessNode(dot_tok.line, dot_tok.col, node, f_tok.text)
+            return node
         elif tok.kind == "constant":
             self.eat()
             return ConstNode(tok.line, tok.col, tok.text)
@@ -574,99 +1201,57 @@ class Parser:
                 raise_err(7, tok.line, tok.col)
             else:
                 raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
-    def parse_if(self):
-        # if ::= "if" expr NL block [ "else" NL block ]
-        if_tok = self.eat()  # 'if'
-        condition = self.parse_expr()
-        self.expect_eol()         # nothing after the condition on that line
+    def parse_fn_call(self):
+        name_tok = self.eat()  # ident
+        self.eat()             # '('
+        args = []
+        if self.peek() is not None and self.peek().kind != "rparen":
+            args.append(self.parse_expr())
+            while self.peek() is not None and self.peek().kind == "comma":
+                self.eat()
+                args.append(self.parse_expr())
+        self.expect("rparen", "')'")
+        return FnCallNode(name_tok.line, name_tok.col, name_tok.text, args)
 
-        then_block = self.parse_block()
-
-        # peek at the next line for an optional 'else'
-        nxt = self.peek_line()
-        else_block = None
-        if nxt is not None and nxt[0].kind == "keyword" and nxt[0].text == "else":
-            self.next_line()
-            self.eat()            # consume 'else'
-            self.expect_eol()     # nothing after 'else' on that line
-            else_block = self.parse_block()
-
-        return IfNode(if_tok.line, if_tok.col, condition, then_block, else_block)
-
-    def parse_while(self):
-        # while ::= "while" expr NL block
-        while_tok = self.eat()  # 'while'
-        condition = self.parse_expr()
-        self.expect_eol()       # nothing after the condition on that line
-        body_block = self.parse_block()
-        return WhileNode(while_tok.line, while_tok.col, condition, body_block)
-
-    def parse_block(self):
-        # block ::= "{" NL { statement } [ exit NL ] "}" NL
-        # The '{' must be on its own line (the line after 'if'/'else').
-        nxt = self.peek_line()
-        if nxt is None or nxt[0].kind != "lbrace":
-            if nxt:
-                raise_syntax_err(nxt[0].line, nxt[0].col, "expected '{'")
-            else:
-                raise_syntax_err(0, 0, "expected '{', found end of file")
-        self.next_line()
-        lbrace_tok = self.eat()   # '{'
-        self.expect_eol()         # nothing after '{'
-
-        stmts = []
-        exit_node = None
-        has_exit = False
-
-        while True:
-            nxt = self.peek_line()
-            if nxt is None:
-                raise_syntax_err(lbrace_tok.line, lbrace_tok.col,
-                                 "block opened here is never closed")
-            if nxt[0].kind == "rbrace":
-                break
-
-            self.next_line()
-            tok = self.peek()
-
-            if tok.kind == "statement" and tok.text == "exit":
-                if has_exit:
-                    raise_err(6, tok.line, tok.col)
-                exit_node = self.parse_exit()
-                self.expect_eol()
-                has_exit = True
-            else:
-                if has_exit:
-                    raise_err(6, tok.line, tok.col)
-                stmt = self.parse_statement()
-                stmts.append(stmt)
-                if not isinstance(stmt, (IfNode, WhileNode)):
-                    self.expect_eol()
-
-        # consume the '}' line
-        self.next_line()
-        self.eat()                # '}'
-        self.expect_eol()         # nothing after '}'
-
-        if not stmts and exit_node is None:
-            raise_syntax_err(lbrace_tok.line, lbrace_tok.col, "block must not be empty")
-
-        return BlockNode(lbrace_tok.line, lbrace_tok.col, stmts, exit_node)
+    def parse_print(self):
+        """Parse: print(expr) or print(\"string\")"""
+        print_tok = self.eat()  # 'print'
+        self.expect("lparen", "'('")
+        # Check for string literal
+        tok = self.peek()
+        if tok is not None and tok.kind == "string_lit":
+            self.eat()
+            arg = StringLitNode(tok.line, tok.col, tok.text)
+        else:
+            arg = self.parse_expr()
+        self.expect("rparen", "')'")
+        return PrintNode(print_tok.line, print_tok.col, arg)
 
 
 class SemanticChecker:
     def __init__(self):
         self.scopes = [{}]  # stack of frames (dicts): name -> DeclNode
-
-    def lookup(self, node, name):
-        for frame in reversed(self.scopes):
-            if name in frame:
-                return frame[name]
-        raise_err(2, node.line, node.col, ue_part=f"'{name}'")
+        self.structs = {}   # name -> StructDefNode
+        self.functions = {} # name -> FnDeclNode (for signature lookup)
+        self.current_fn = None   # FnDeclNode/MemberFnDeclNode being checked, or None
+        self.current_struct = None  # StructDefNode whose method is being checked, or None
+        self.recorded_member_calls = []  # list[MemberCallNode] for mutation verification
 
     def _sem_err(self, line, col, msg):
         sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n")
         sys.exit(15)
+
+    def _all_fields_mut(self, struct_name):
+        if struct_name not in self.structs:
+            return True
+        sdef = self.structs[struct_name]
+        for f in sdef.fields:
+            if not f.mutable:
+                return False
+            if f.type_name in self.structs:
+                if not self._all_fields_mut(f.type_name):
+                    return False
+        return True
 
     def _check_assignable(self, expr, want_type, at_node, what):
         """Verify expr.type can go into a variable of want_type."""
@@ -675,45 +1260,475 @@ class SemanticChecker:
             return
         if have == "i32" and want_type == "i64":
             return  # only widening allowed
-        # constant that is too large for the declared integer type
         if isinstance(expr, ConstNode) and want_type in ("i32", "i64"):
             self._sem_err(expr.line, expr.col,
                           f"constant {expr.val} does not fit in {want_type}")
         self._sem_err(at_node.line, at_node.col,
                       f"cannot {what} of type {want_type} with a value of type {have}")
 
+    def _validate_type(self, type_name, line, col):
+        """Ensure type_name is a known built-in or struct."""
+        if type_name not in ("i32", "i64", "bool") and type_name not in self.structs:
+            raise_err(11, line, col, ue_part=f"'{type_name}'")
 
+    # ── active symbol lookup ─────────────────────────────────────────
+    def _lookup(self, name):
+        """Return DeclNode for name searching through scope stack."""
+        for frame in reversed(self.scopes):
+            if name in frame:
+                return frame[name]
+        return None
+
+    def _declare(self, name, decl_node):
+        """Register a new variable in current scope (raises if already declared in same block)."""
+        if name in self.scopes[-1]:
+            raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
+        if self.current_fn is not None and len(self.scopes) == 2 and name in self.scopes[0]:
+            raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
+        self.scopes[-1][name] = decl_node
+
+    # ── multi-pass program visit ────────────────────────────────────────
     def visit_program(self, node):
-        self.scopes = [{}]
+        # Pass 1: collect struct types and register all function signatures
+        #         (so member fn bodies can call global fns declared later)
         for stmt in node.stmts:
-            stmt.accept(self)
+            if isinstance(stmt, StructDefNode):
+                self._register_struct_type(stmt)
+            elif isinstance(stmt, FnDeclNode):
+                self._register_fn_sig(stmt)
+
+        # Pass 2: check member function bodies (now global fns are all known)
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                self._check_struct_methods(stmt)
+
+        # Pass 2.5: compute fixed-point mutating property across all structs
+        self._compute_all_mutating()
+
+        # Pass 3: check non-struct/non-fn top-level stmts and fn bodies
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                pass  # already done
+            elif isinstance(stmt, FnDeclNode):
+                self._check_fn_body(stmt)
+            else:
+                stmt.accept(self)
+
         if node.exit:
             node.exit.accept(self)
 
-    def visit_decl(self, node):
-        top_frame = self.scopes[-1]
-        if node.name in top_frame:
+        # Pass 4: verify that all mutating member calls across the AST are valid
+        self._check_all_mutating_calls()
+
+    def _check_all_mutating_calls(self):
+        for mcall in self.recorded_member_calls:
+            if getattr(mcall.mfn, 'is_mutating', False):
+                self._check_receiver_mutable(mcall.target_node, mcall, mcall.mfn.name)
+
+    def _register_fn_sig(self, node):
+        """Register function name + signature without checking body."""
+        if node.name in self.functions or node.name in self.structs or node.name in ("i32", "i64", "bool"):
             raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
-        node.init.accept(self)  # resolve before the name enters scope
-        self._check_assignable(node.init, node.type_name, node,
-                               f"initialise '{node.name}'")
-        top_frame[node.name] = node
+        # Validate param and return types
+        for p in node.params:
+            self._validate_type(p.type_name, p.line, p.col)
+        self._validate_type(node.ret_type, node.line, node.col)
+        self.functions[node.name] = node
+
+    def _check_fn_body(self, node):
+        """Type-check the body of a function in its isolated scope."""
+        saved_scopes = self.scopes
+        saved_fn = self.current_fn
+
+        # Set up isolated scope: only params visible initially
+        self.current_fn = node
+        param_frame = {}
+        for p in node.params:
+            # Create a pseudo-DeclNode for each parameter (immutable)
+            pdecl = DeclNode(p.line, p.col, p.type_name, p.name, False, None)
+            param_frame[p.name] = pdecl
+        self.scopes = [param_frame]
+
+        # Check body block
+        node.body.accept(self)
+
+        # Validate exit type matches ret_type
+        if node.body.exit_node is not None:
+            exit_val = node.body.exit_node.val
+            if exit_val.type not in ("i32", "i64", "bool") and exit_val.type not in self.structs:
+                self._sem_err(node.body.exit_node.line, node.body.exit_node.col,
+                              f"function '{node.name}' must return {node.ret_type}, got {exit_val.type}")
+            try:
+                self._check_assignable(exit_val, node.ret_type,
+                                       node.body.exit_node,
+                                       f"return from '{node.name}'")
+            except SystemExit:
+                raise
+
+        # Restore
+        self.current_fn = saved_fn
+        self.scopes = saved_scopes
+
+    def _register_struct_type(self, node):
+        """Register struct name + field layout without checking method bodies."""
+        if node.name in self.structs or node.name in ("i32", "i64", "bool"):
+            raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
+        for f in node.fields:
+            if f.type_name == node.name:
+                self._sem_err(f.line, f.col, f"struct '{node.name}' cannot contain itself")
+            elif f.type_name not in ("i32", "i64", "bool") and f.type_name not in self.structs:
+                raise_err(11, f.line, f.col, ue_part=f"'{f.type_name}'")
+        self.structs[node.name] = node
+        # Validate method signatures only (bodies checked in pass 2)
+        for mfn in node.methods:
+            for p in mfn.params:
+                self._validate_type(p.type_name, p.line, p.col)
+            self._validate_type(mfn.ret_type, mfn.line, mfn.col)
+
+    def _check_struct_methods(self, node):
+        """Check member function bodies (called after all fn sigs registered)."""
+        for mfn in node.methods:
+            self._check_member_fn_body(node, mfn)
+
+    def visit_struct_def(self, node):
+        """Legacy entry point — used by codegen visitor; semantic checker uses _register_struct_type."""
+        self._register_struct_type(node)
+        self._check_struct_methods(node)
+
+    def _get_root_name(self, node):
+        if isinstance(node, VarNode):
+            return node.name
+        if isinstance(node, FieldAccessNode):
+            return self._get_root_name(node.obj)
+        return None
+
+    def _compute_all_mutating(self):
+        """Compute is_mutating for all member functions across all structs until stable."""
+        changed = True
+        while changed:
+            changed = False
+            for sname, struct_node in self.structs.items():
+                for mfn in struct_node.methods:
+                    if getattr(mfn, 'is_mutating', False):
+                        continue
+                    if self._body_is_mutating(struct_node, mfn):
+                        mfn.is_mutating = True
+                        changed = True
+
+    def _body_is_mutating(self, struct_node, mfn):
+        """Return True if mfn's body contains a field assignment or mutating call on self/fields."""
+        field_names = {f.name for f in struct_node.fields}
+        method_names = {m.name for m in struct_node.methods}
+        return self._block_mutating(mfn.body, field_names, method_names, struct_node)
+
+    def _block_mutating(self, block, field_names, method_names, struct_node):
+        if block is None:
+            return False
+        if self._stmts_mutating(block.stmts, field_names, method_names, struct_node):
+            return True
+        if block.exit_node is not None and getattr(block.exit_node, 'val', None) is not None:
+            if self._expr_mutating(block.exit_node.val, field_names, method_names, struct_node):
+                return True
+        return False
+
+    def _expr_mutating(self, expr, field_names, method_names, struct_node):
+        """Return True if expr contains a call to a mutating method on self or a field."""
+        if expr is None:
+            return False
+        if isinstance(expr, FnCallNode):
+            if expr.name in method_names:
+                mfn2 = next((m for m in struct_node.methods if m.name == expr.name), None)
+                if mfn2 and getattr(mfn2, 'is_mutating', False):
+                    return True
+            for arg in expr.args:
+                if self._expr_mutating(arg, field_names, method_names, struct_node):
+                    return True
+        elif isinstance(expr, MemberCallNode):
+            # Check if this is a call on a field of struct_node
+            root = self._get_root_name(expr.target_node)
+            if root and root in field_names:
+                fdef = next((f for f in struct_node.fields if f.name == root), None)
+                if fdef and fdef.type_name in self.structs:
+                    target_sdef = self.structs[fdef.type_name]
+                    mfn2 = next((m for m in target_sdef.methods if m.name == expr.member_name), None)
+                    if mfn2 and getattr(mfn2, 'is_mutating', False):
+                        return True
+            if self._expr_mutating(expr.target_node, field_names, method_names, struct_node):
+                return True
+            for arg in expr.args:
+                if self._expr_mutating(arg, field_names, method_names, struct_node):
+                    return True
+        elif isinstance(expr, BinOpNode):
+            return (self._expr_mutating(expr.left, field_names, method_names, struct_node) or
+                    self._expr_mutating(expr.right, field_names, method_names, struct_node))
+        elif isinstance(expr, NotNode):
+            return self._expr_mutating(expr.operand, field_names, method_names, struct_node)
+        elif isinstance(expr, FieldAccessNode):
+            return self._expr_mutating(expr.obj, field_names, method_names, struct_node)
+        elif isinstance(expr, StructInitNode):
+            for ie in expr.inits:
+                if self._expr_mutating(ie, field_names, method_names, struct_node):
+                    return True
+        return False
+
+    def _stmts_mutating(self, stmts, field_names, method_names, struct_node):
+        for stmt in stmts:
+            if isinstance(stmt, AssignNode):
+                # Assignment to a field name of this struct
+                if stmt.name in field_names:
+                    return True
+                if self._expr_mutating(stmt.value, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, DeclNode):
+                for init_expr in (stmt.inits if isinstance(stmt.inits, list) else [stmt.init]):
+                    if init_expr is not None and self._expr_mutating(init_expr, field_names, method_names, struct_node):
+                        return True
+            elif isinstance(stmt, FnCallNode):
+                if stmt.name in method_names:
+                    mfn2 = next((m for m in struct_node.methods if m.name == stmt.name), None)
+                    if mfn2 and getattr(mfn2, 'is_mutating', False):
+                        return True
+                for arg in stmt.args:
+                    if self._expr_mutating(arg, field_names, method_names, struct_node):
+                        return True
+            elif isinstance(stmt, MemberCallNode):
+                if self._expr_mutating(stmt, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, PrintNode):
+                if self._expr_mutating(stmt.arg, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, IfNode):
+                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                    return True
+                if self._block_mutating(stmt.then_block, field_names, method_names, struct_node):
+                    return True
+                if stmt.else_block and self._block_mutating(stmt.else_block, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, WhileNode):
+                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                    return True
+                if self._block_mutating(stmt.body, field_names, method_names, struct_node):
+                    return True
+            elif isinstance(stmt, ExitNode):
+                if stmt.val and self._expr_mutating(stmt.val, field_names, method_names, struct_node):
+                    return True
+        return False
+
+    def _check_member_fn_body(self, struct_node, mfn):
+        """Type-check a member function body with struct fields + params in scope."""
+        saved_scopes = self.scopes
+        saved_fn = self.current_fn
+        saved_struct = self.current_struct
+        # Build field frame (mutable flags preserved)
+        field_frame = {}
+        for f in struct_node.fields:
+            fdecl = DeclNode(f.line, f.col, f.type_name, f.name, f.mutable, None)
+            field_frame[f.name] = fdecl
+        # Build param frame (params are immutable)
+        param_frame = {}
+        for p in mfn.params:
+            pdecl = DeclNode(p.line, p.col, p.type_name, p.name, False, None)
+            param_frame[p.name] = pdecl
+        self.scopes = [field_frame, param_frame]
+        self.current_fn = mfn
+        self.current_struct = struct_node
+        mfn.body.accept(self)
+        if mfn.body.exit_node is not None:
+            self._check_assignable(mfn.body.exit_node.val, mfn.ret_type,
+                                   mfn.body.exit_node, f"return from '{mfn.name}'")
+        self.current_fn = saved_fn
+        self.current_struct = saved_struct
+        self.scopes = saved_scopes
+
+    def visit_fn_decl(self, node):
+        # Should only be called via _check_fn_body; fn signatures already registered
+        pass
+
+    def visit_member_call(self, node):
+        """Type-check a member call site: resolve receiver type, find method, check args."""
+        receiver_type = node.target_node.accept(self)
+        if receiver_type not in self.structs:
+            self._sem_err(node.line, node.col,
+                          f"type '{receiver_type}' is not a struct")
+        sdef = self.structs[receiver_type]
+        mfn = None
+        for m in sdef.methods:
+            if m.name == node.member_name:
+                mfn = m
+                break
+        if mfn is None:
+            self._sem_err(node.line, node.col,
+                          f"struct '{receiver_type}' has no member function '{node.member_name}'")
+        if len(node.args) != len(mfn.params):
+            self._sem_err(node.line, node.col,
+                          f"member function '{node.member_name}' expects {len(mfn.params)} argument(s), got {len(node.args)}")
+        for arg, param in zip(node.args, mfn.params):
+            arg.accept(self)
+            self._check_assignable(arg, param.type_name, node,
+                                   f"pass argument to '{param.name}'")
+        node.mfn = mfn
+        node.type = mfn.ret_type
+        self.recorded_member_calls.append(node)
+        # Mutation check: if the method is already known mutating, receiver must be mutable
+        if getattr(mfn, 'is_mutating', False):
+            self._check_receiver_mutable(node.target_node, node, mfn.name)
+        return node.type
+
+    def _check_receiver_mutable(self, expr, call_node, method_name):
+        """Ensure the receiver is a mutable variable (or mutable field chain)."""
+        if isinstance(expr, VarNode):
+            decl = getattr(expr, 'decl', None) or self._lookup(expr.name)
+            if decl is None:
+                return  # undeclared — already will have errored
+            if not decl.mutable:
+                self._sem_err(call_node.line, call_node.col,
+                              f"cannot call mutating method '{method_name}' on immutable '{expr.name}'")
+        elif isinstance(expr, FieldAccessNode):
+            # The field itself must be mutable, and the chain up must be mutable
+            obj_type = expr.obj.type if hasattr(expr.obj, 'type') else None
+            if obj_type and obj_type in self.structs:
+                sdef = self.structs[obj_type]
+                for f in sdef.fields:
+                    if f.name == expr.field_name:
+                        if not f.mutable:
+                            self._sem_err(call_node.line, call_node.col,
+                                          f"cannot call mutating method '{method_name}' on immutable field '{expr.field_name}'")
+                        break
+            self._check_receiver_mutable(expr.obj, call_node, method_name)
+
+    def _check_struct_inits(self, sdef, inits, node, prefix):
+        for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
+            if isinstance(expr, StructInitNode):
+                if f.type_name not in self.structs:
+                    self._sem_err(expr.line, expr.col, f"field '{prefix}.{f.name}' of type {f.type_name} cannot be initialised with {{...}}")
+                sub_sdef = self.structs[f.type_name]
+                if len(expr.inits) != len(sub_sdef.fields):
+                    self._sem_err(expr.line, expr.col, f"cannot initialise '{prefix}.{f.name}' of type {f.type_name}: expected {len(sub_sdef.fields)} values, got {len(expr.inits)}")
+                self._check_struct_inits(sub_sdef, expr.inits, node, f"{prefix}.{f.name}")
+                expr.type = f.type_name
+            else:
+                expr.accept(self)
+                self._check_assignable(expr, f.type_name, node, f"initialise '{prefix}.{f.name}'")
+
+    def visit_decl(self, node):
+        self._validate_type(node.type_name, node.line, node.col)
+
+        if node.type_name in ("i32", "i64", "bool"):
+            if len(node.inits) > 1:
+                self._sem_err(node.line, node.col,
+                              f"cannot initialise '{node.name}' of type {node.type_name} with multiple values")
+            node.init.accept(self)  # resolve before the name enters scope
+            self._check_assignable(node.init, node.type_name, node,
+                                   f"initialise '{node.name}'")
+            node.is_copy = False
+        else:
+            sdef = self.structs[node.type_name]
+            if len(node.inits) == 1 and not isinstance(node.inits[0], StructInitNode):
+                init_expr = node.inits[0]
+                init_type = init_expr.accept(self)
+                if init_type == node.type_name:
+                    node.is_copy = True
+                elif len(sdef.fields) == 1:
+                    self._check_assignable(init_expr, sdef.fields[0].type_name, node,
+                                           f"initialise '{node.name}.{sdef.fields[0].name}'")
+                    node.is_copy = False
+                else:
+                    self._sem_err(node.line, node.col,
+                                  f"cannot initialise '{node.name}' of type {node.type_name}: expected {len(sdef.fields)} values, got 1")
+            else:
+                if len(node.inits) != len(sdef.fields):
+                    self._sem_err(node.line, node.col,
+                                  f"cannot initialise '{node.name}' of type {node.type_name}: expected {len(sdef.fields)} values, got {len(node.inits)}")
+                self._check_struct_inits(sdef, node.inits, node, node.name)
+                node.is_copy = False
+
+        self._declare(node.name, node)
 
     def visit_assign(self, node):
-        decl = self.lookup(node, node.name)
+        decl = self._lookup(node.name)
+        if decl is None:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
         node.decl = decl
         if not decl.mutable:
             raise_err(12, node.line, node.col, ue_part=f"'{node.name}'")
-        node.value.accept(self)
-        self._check_assignable(node.value, decl.type_name, node,
-                               f"assign to '{node.name}'")
+
+        if node.field_chain:
+            curr_type = decl.type_name
+            node.field_indices = []
+            for fname in node.field_chain:
+                if curr_type not in self.structs:
+                    self._sem_err(node.line, node.col, f"type '{curr_type}' is not a struct")
+                sdef = self.structs[curr_type]
+                target_f = None
+                target_idx = None
+                for idx, f in enumerate(sdef.fields):
+                    if f.name == fname:
+                        target_f = f
+                        target_idx = idx
+                        break
+                if target_f is None:
+                    self._sem_err(node.line, node.col, f"struct '{curr_type}' has no field '{fname}'")
+                if not target_f.mutable:
+                    self._sem_err(node.line, node.col, f"cannot assign to immutable field '{fname}'")
+                node.field_indices.append(target_idx)
+                curr_type = target_f.type_name
+
+            node.target_type = curr_type
+            node.value.accept(self)
+            if curr_type in self.structs:
+                if not self._all_fields_mut(curr_type):
+                    self._sem_err(node.line, node.col,
+                                  f"cannot assign to '{node.full_name}': struct '{curr_type}' has immutable fields")
+            self._check_assignable(node.value, curr_type, node, f"assign to '{node.full_name}'")
+        else:
+            node.value.accept(self)
+            if decl.type_name in self.structs:
+                if not self._all_fields_mut(decl.type_name):
+                    self._sem_err(node.line, node.col,
+                                  f"cannot assign to '{node.name}': struct '{decl.type_name}' has immutable fields")
+            self._check_assignable(node.value, decl.type_name, node, f"assign to '{node.name}'")
+
+    def visit_field_access(self, node):
+        obj_type = node.obj.accept(self)
+        if obj_type not in self.structs:
+            self._sem_err(node.line, node.col, f"type '{obj_type}' is not a struct")
+        sdef = self.structs[obj_type]
+        target_f = None
+        target_idx = None
+        for idx, f in enumerate(sdef.fields):
+            if f.name == node.field_name:
+                target_f = f
+                target_idx = idx
+                break
+        if target_f is None:
+            self._sem_err(node.line, node.col, f"struct '{obj_type}' has no field '{node.field_name}'")
+        node.field_index = target_idx
+        node.type = target_f.type_name
+        return node.type
 
     def visit_exit(self, node):
         node.val.accept(self)
-        # exit accepts integer or bool; any declared type is fine here
+        if node.val.type in self.structs:
+            if self.current_fn is None or self.current_fn.ret_type != node.val.type:
+                self._sem_err(node.line, node.col,
+                              f"cannot exit with a value of type {node.val.type}")
+
+    def visit_block(self, node):
+        """Visit statements inside a block (if/while body; fn body is handled by _check_fn_body)."""
+        self.scopes.append({})
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node:
+            node.exit_node.accept(self)
+            # Validate return type if we are inside a function
+            if self.current_fn is not None:
+                self._check_assignable(node.exit_node.val, self.current_fn.ret_type,
+                                       node.exit_node,
+                                       f"return from '{self.current_fn.name}'")
+        self.scopes.pop()
 
     def visit_if(self, node):
-        cond_type = node.condition.accept(self)
+        cond_type = node.cond.accept(self)
         if cond_type != "bool":
             self._sem_err(node.line, node.col,
                           f"if condition must be bool, got {cond_type}")
@@ -722,19 +1737,66 @@ class SemanticChecker:
             node.else_block.accept(self)
 
     def visit_while(self, node):
-        cond_type = node.condition.accept(self)
+        cond_type = node.cond.accept(self)
         if cond_type != "bool":
             self._sem_err(node.line, node.col,
                           f"while condition must be bool, got {cond_type}")
-        node.body_block.accept(self)
+        node.body.accept(self)
 
-    def visit_block(self, node):
-        self.scopes.append({})
-        for stmt in node.stmts:
-            stmt.accept(self)
-        if node.exit:
-            node.exit.accept(self)
-        self.scopes.pop()
+    def visit_fn_call(self, node):
+        # Inside a member function: first look among the struct's own methods
+        if self.current_struct is not None:
+            mfn = next((m for m in self.current_struct.methods if m.name == node.name), None)
+            if mfn is not None:
+                # Treat as a self-call (call on implicit self)
+                if len(node.args) != len(mfn.params):
+                    self._sem_err(node.line, node.col,
+                                  f"member function '{node.name}' expects {len(mfn.params)} argument(s), got {len(node.args)}")
+                for arg, param in zip(node.args, mfn.params):
+                    arg.accept(self)
+                    self._check_assignable(arg, param.type_name, node,
+                                           f"pass argument to '{param.name}'")
+                # Mutating self-call: only allowed if the current method is mutating
+                # (or if all fields are mutable — we'll check at the outer call site)
+                node.type = mfn.ret_type
+                node.self_method = mfn  # flag for codegen
+                return node.type
+        # Built-in: read()
+        if node.name == "read":
+            if len(node.args) != 0:
+                self._sem_err(node.line, node.col,
+                              f"built-in 'read' takes no arguments, got {len(node.args)}")
+            node.type = "i32"
+            node.self_method = None
+            return node.type
+        if node.name not in self.functions:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+        fn = self.functions[node.name]
+        if len(node.args) != len(fn.params):
+            self._sem_err(node.line, node.col,
+                          f"function '{node.name}' expects {len(fn.params)} argument(s), got {len(node.args)}")
+        for arg, param in zip(node.args, fn.params):
+            arg.accept(self)
+            self._check_assignable(arg, param.type_name, node,
+                                   f"pass argument to '{param.name}'")
+        node.type = fn.ret_type
+        node.self_method = None
+        return node.type
+
+    def visit_string_lit(self, node):
+        node.type = "string"
+        return "string"
+
+    def visit_print(self, node):
+        """Type-check print(expr): accepts i32, i64, bool, string literal, or struct."""
+        if isinstance(node.arg, StringLitNode):
+            node.arg.type = "string"
+            return
+        t = node.arg.accept(self)
+        allowed = ("i32", "i64", "bool", "string")
+        if t not in allowed and t not in self.structs:
+            self._sem_err(node.line, node.col,
+                          f"print requires i32, i64, bool, a string, or a struct argument, got {t}")
 
     def visit_not(self, node):
         t = node.operand.accept(self)
@@ -749,17 +1811,14 @@ class SemanticChecker:
         rt = node.right.accept(self)
 
         if node.op in ("+", "-", "*"):
-            # arithmetic: both must be integers
             if lt == "bool":
                 self._sem_err(node.line, node.col,
                               f"cannot apply '{node.op}' to bool")
             if rt == "bool":
                 self._sem_err(node.line, node.col,
                               f"cannot apply '{node.op}' to bool")
-            # result is the wider type
             node.type = "i64" if (lt == "i64" or rt == "i64") else "i32"
         else:  # == or !=
-            # both must be integers (any mix) or both bools
             both_bool = (lt == "bool" and rt == "bool")
             both_int  = (lt in ("i32", "i64") and rt in ("i32", "i64"))
             if not (both_bool or both_int):
@@ -770,7 +1829,9 @@ class SemanticChecker:
         return node.type
 
     def visit_var(self, node):
-        decl = self.lookup(node, node.name)
+        decl = self._lookup(node.name)
+        if decl is None:
+            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
         node.decl = decl
         node.type = decl.type_name
         return node.type
@@ -800,19 +1861,112 @@ class CodeGenVisitor:
         self.fmt_global = fmt_global
         # Symbol table: decl node -> alloca_ptr
         self.symbols = {}
+        self.struct_defs = {}
+        self.fn_nodes = {}
+        # function IR objects: fn_name -> ir.Function
+        self.ir_functions = {}
+        self.current_fn = None         # ir.Function currently being generated
+        self.current_fn_node = None    # FnDeclNode currently being generated
+        self.current_struct_node = None  # StructDefNode when inside member fn
+
+    def _active_builder(self):
+        return self.builder
 
     def visit_program(self, node):
+        # Pass 1: declare all struct types, member function prototypes, and global function prototypes
         for stmt in node.stmts:
-            stmt.accept(self)
+            if isinstance(stmt, StructDefNode):
+                self._declare_struct_ir(stmt)
+            elif isinstance(stmt, FnDeclNode):
+                self.fn_nodes[stmt.name] = stmt
+                self._declare_fn_ir(stmt)
+
+        # Pass 2: generate all function bodies (member fns and global fns), then top-level stmts
+        for stmt in node.stmts:
+            if isinstance(stmt, StructDefNode):
+                for mfn in stmt.methods:
+                    self._gen_member_fn_body(stmt, mfn)
+            elif isinstance(stmt, FnDeclNode):
+                self._gen_fn_body(stmt)
+            else:
+                stmt.accept(self)
+
         if node.exit:
             node.exit.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.unreachable()
 
+    def _declare_struct_ir(self, node):
+        """Declare struct LLVM type and IR function prototypes for its member functions."""
+        struct_type = module.context.get_identified_type(node.name)
+        field_types = [TYPES[f.type_name] for f in node.fields]
+        struct_type.set_body(*field_types)
+        TYPES[node.name] = struct_type
+        self.struct_defs[node.name] = node
+        # Declare IR functions for each member function
+        for mfn in node.methods:
+            param_types = [ir.PointerType(struct_type)] + [TYPES[p.type_name] for p in mfn.params]
+            ret_llvm = TYPES[mfn.ret_type]
+            fn_type = ir.FunctionType(ret_llvm, param_types)
+            ir_fn = ir.Function(module, fn_type, name=f"{node.name}_{mfn.name}")
+            self.ir_functions[f"{node.name}.{mfn.name}"] = ir_fn
+            self.fn_nodes[f"{node.name}.{mfn.name}"] = mfn
+
+    def _declare_fn_ir(self, node):
+        """Create an ir.Function prototype for the function (no body yet)."""
+        param_types = [TYPES[p.type_name] for p in node.params]
+        ret_llvm = TYPES[node.ret_type]
+        fn_type = ir.FunctionType(ret_llvm, param_types)
+        ir_fn = ir.Function(module, fn_type, name=f"f_{node.name}")
+        self.ir_functions[node.name] = ir_fn
+
+    def _gen_fn_body(self, node):
+        """Generate LLVM IR for the function body."""
+        ir_fn = self.ir_functions[node.name]
+
+        # Save main context
+        saved_builder = self.builder
+        saved_symbols = self.symbols
+        saved_fn = self.current_fn
+        saved_fn_node = self.current_fn_node
+        saved_param_ptrs = getattr(self, '_param_ptrs', {})
+
+        # Create entry block and builder
+        entry_bb = ir_fn.append_basic_block("entry")
+        fn_builder = ir.IRBuilder(entry_bb)
+        self.builder = fn_builder
+        self.symbols = {}
+        self._param_ptrs = {}
+        self.current_fn = ir_fn
+        self.current_fn_node = node
+
+        # Allocate slots for parameters in the entry block
+        for i, p in enumerate(node.params):
+            llvm_type = TYPES[p.type_name]
+            ptr = fn_builder.alloca(llvm_type, name=p.name)
+            fn_builder.store(ir_fn.args[i], ptr)
+            self._param_ptrs[p.name] = ptr
+
+        # Generate body statements
+        node.body.accept(self)
+
+        # Restore
+        self.builder = saved_builder
+        self.symbols = saved_symbols
+        self.current_fn = saved_fn
+        self.current_fn_node = saved_fn_node
+        self._param_ptrs = saved_param_ptrs
+
+
     def coerce(self, value, have, want):
         if have == "i32" and want == "i64":
             return self.builder.sext(value, I64, name="wide")
         return value
+
+    def visit_struct_def(self, node):
+        self._declare_struct_ir(node)
+        for mfn in node.methods:
+            self._gen_member_fn_body(node, mfn)
 
     def alloca_in_entry(self, typ, name):
         entry_bb = self.builder.function.entry_basic_block
@@ -825,90 +1979,348 @@ class CodeGenVisitor:
         self.builder.position_at_end(curr_bb)
         return ptr
 
+    def visit_fn_decl(self, node):
+        pass  # handled by visit_program two-pass
+
+    def _gen_member_fn_body(self, struct_node, mfn):
+        """Generate IR for a member function; first param is a pointer to the struct (implicit self)."""
+        ir_fn = self.ir_functions[f"{struct_node.name}.{mfn.name}"]
+        struct_type = TYPES[struct_node.name]
+
+        saved_builder = self.builder
+        saved_symbols = self.symbols
+        saved_fn = self.current_fn
+        saved_fn_node = self.current_fn_node
+        saved_param_ptrs = getattr(self, '_param_ptrs', {})
+        saved_field_ptrs = getattr(self, '_field_ptrs', {})
+        saved_struct_node = self.current_struct_node
+        saved_self_ptr = getattr(self, '_self_ptr', None)
+
+        entry_bb = ir_fn.append_basic_block("entry")
+        fn_builder = ir.IRBuilder(entry_bb)
+        self.builder = fn_builder
+        self.symbols = {}
+        self._param_ptrs = {}
+        self._field_ptrs = {}
+        self.current_fn = ir_fn
+        self.current_fn_node = mfn
+        self.current_struct_node = struct_node
+
+        # ir_fn.args[0] is the implicit self pointer
+        self_ptr = ir_fn.args[0]
+        self._self_ptr = self_ptr
+        # Expose each struct field as a GEP into self
+        for idx, f in enumerate(struct_node.fields):
+            field_ptr = fn_builder.gep(self_ptr,
+                                       [ir.Constant(I32, 0), ir.Constant(I32, idx)],
+                                       name=f.name)
+            self._field_ptrs[f.name] = field_ptr
+
+        # Allocate and store explicit params (args[1:])
+        for i, p in enumerate(mfn.params):
+            llvm_type = TYPES[p.type_name]
+            ptr = fn_builder.alloca(llvm_type, name=p.name)
+            fn_builder.store(ir_fn.args[i + 1], ptr)
+            self._param_ptrs[p.name] = ptr
+
+        mfn.body.accept(self)
+
+        self.builder = saved_builder
+        self.symbols = saved_symbols
+        self.current_fn = saved_fn
+        self.current_fn_node = saved_fn_node
+        self._param_ptrs = saved_param_ptrs
+        self._field_ptrs = saved_field_ptrs
+        self.current_struct_node = saved_struct_node
+        self._self_ptr = saved_self_ptr
+
+    def visit_member_call(self, node):
+        """Emit a call to a member function, passing a pointer to the receiver struct."""
+        receiver_type = node.target_node.type
+        ir_fn = self.ir_functions[f"{receiver_type}.{node.member_name}"]
+        mfn = node.mfn
+
+        # Get a pointer to the receiver (need an alloca if it's a value)
+        self_ptr = self.get_lvalue_ptr(node.target_node)
+
+        # Evaluate explicit args
+        coerced = []
+        for arg, param in zip(node.args, mfn.params):
+            v = arg.accept(self)
+            coerced.append(self.coerce(v, arg.type, param.type_name))
+
+        return self.builder.call(ir_fn, [self_ptr] + coerced)
+
+    def _store_struct_fields(self, ptr, sdef, inits, name_prefix):
+        for idx, (f, expr) in enumerate(zip(sdef.fields, inits)):
+            field_ptr = self.builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=f"{name_prefix}.{f.name}")
+            if isinstance(expr, StructInitNode):
+                sub_sdef = self.struct_defs[f.type_name]
+                self._store_struct_fields(field_ptr, sub_sdef, expr.inits, f"{name_prefix}.{f.name}")
+            else:
+                val = expr.accept(self)
+                val = self.coerce(val, expr.type, f.type_name)
+                self.builder.store(val, field_ptr)
+
     def visit_decl(self, node):
         llvm_type = TYPES[node.type_name]
-        init_val = node.init.accept(self)
-        init_val = self.coerce(init_val, node.init.type, node.type_name)
         ptr = self.alloca_in_entry(llvm_type, node.name)
-        self.builder.store(init_val, ptr)
         self.symbols[node] = ptr
 
+        if node.type_name in ("i32", "i64", "bool"):
+            init_val = node.init.accept(self)
+            init_val = self.coerce(init_val, node.init.type, node.type_name)
+            self.builder.store(init_val, ptr)
+        else:
+            if getattr(node, "is_copy", False):
+                val = node.init.accept(self)
+                self.builder.store(val, ptr)
+            else:
+                sdef = self.struct_defs[node.type_name]
+                self._store_struct_fields(ptr, sdef, node.inits, node.name)
+
+    def get_lvalue_ptr(self, expr):
+        if isinstance(expr, VarNode):
+            if expr.decl in self.symbols:
+                return self.symbols[expr.decl]
+            if self.current_fn is not None and hasattr(self, '_param_ptrs') and expr.name in self._param_ptrs:
+                return self._param_ptrs[expr.name]
+            if self.current_fn is not None and hasattr(self, '_field_ptrs') and expr.name in self._field_ptrs:
+                return self._field_ptrs[expr.name]
+            return self.symbols[expr.decl]
+        elif isinstance(expr, FieldAccessNode):
+            obj_ptr = self.get_lvalue_ptr(expr.obj)
+            return self.builder.gep(obj_ptr, [ir.Constant(I32, 0), ir.Constant(I32, expr.field_index)], name=f"{expr.field_name}_ptr")
+        else:
+            val = expr.accept(self)
+            tmp = self.alloca_in_entry(TYPES[expr.type], "tmp_struct")
+            self.builder.store(val, tmp)
+            return tmp
+
+    def visit_field_access(self, node):
+        field_ptr = self.get_lvalue_ptr(node)
+        return self.builder.load(field_ptr, name=node.field_name)
+
     def visit_assign(self, node):
-        ptr = self.symbols[node.decl]
-        val = node.value.accept(self)
-        val = self.coerce(val, node.value.type, node.decl.type_name)
-        self.builder.store(val, ptr)
+        if node.decl in self.symbols:
+            ptr = self.symbols[node.decl]
+        elif hasattr(self, '_param_ptrs') and node.name in self._param_ptrs:
+            ptr = self._param_ptrs[node.name]
+        elif hasattr(self, '_field_ptrs') and node.name in self._field_ptrs:
+            ptr = self._field_ptrs[node.name]
+        else:
+            ptr = self.symbols[node.decl]  # will raise KeyError with a clear message
+        if node.field_chain:
+            curr_ptr = ptr
+            for idx, fname in zip(node.field_indices, node.field_chain):
+                curr_ptr = self.builder.gep(curr_ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=fname)
+            val = node.value.accept(self)
+            val = self.coerce(val, node.value.type, node.target_type)
+            self.builder.store(val, curr_ptr)
+        else:
+            val = node.value.accept(self)
+            val = self.coerce(val, node.value.type, node.decl.type_name)
+            self.builder.store(val, ptr)
 
     def visit_exit(self, node):
         val = node.val.accept(self)
         have = node.val.type
-        if have == "bool":
-            true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            str_ptr = self.builder.select(val, true_ptr, false_ptr)
-            fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        if self.current_fn is not None:
+            # Inside a function: emit ret
+            val = self.coerce(val, have, self.current_fn_node.ret_type)
+            self.builder.ret(val)
         else:
-            val = self.coerce(val, have, "i64")
-            fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
-            self.builder.call(self.printf, [fmt_ptr, val])
-        self.builder.ret(ir.Constant(I32, 0))
+            # Top-level: print and ret 0
+            if have == "bool":
+                true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                str_ptr = self.builder.select(val, true_ptr, false_ptr)
+                fmt_ptr = self.builder.gep(fmt_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_ptr, str_ptr])
+            else:
+                val = self.coerce(val, have, "i64")
+                fmt_ptr = self.builder.gep(self.fmt_global, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_ptr, val])
+            self.builder.ret(ir.Constant(I32, 0))
 
     def visit_not(self, node):
         val = node.operand.accept(self)
         # !bool: xor with 1 (i1)
         return self.builder.xor(val, ir.Constant(I1, 1), name="not")
 
+    def visit_block(self, node):
+        """Emit IR for statements and optional early-exit inside if/while blocks."""
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node:
+            node.exit_node.accept(self)
+
     def visit_if(self, node):
-        cond = node.condition.accept(self)
+        cond_val = node.cond.accept(self)
+        fn_ir = self.current_fn if self.current_fn else self.builder.function
+        then_bb = fn_ir.append_basic_block("then")
+        merge_bb = fn_ir.append_basic_block("merge")
 
-        then_bb  = self.builder.function.append_basic_block("then")
-        else_bb  = self.builder.function.append_basic_block("else") if node.else_block else None
-        merge_bb = self.builder.function.append_basic_block("merge")
+        if node.else_block:
+            else_bb = fn_ir.append_basic_block("else")
+            self.builder.cbranch(cond_val, then_bb, else_bb)
+        else:
+            self.builder.cbranch(cond_val, then_bb, merge_bb)
 
-        self.builder.cbranch(cond, then_bb, else_bb or merge_bb)
-
-        # then arm
+        # Then block
         self.builder.position_at_end(then_bb)
         node.then_block.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.branch(merge_bb)
 
-        # else arm
+        # Else block
         if node.else_block:
             self.builder.position_at_end(else_bb)
             node.else_block.accept(self)
             if not self.builder.block.is_terminated:
                 self.builder.branch(merge_bb)
 
+        # Continue after if
         self.builder.position_at_end(merge_bb)
 
+
     def visit_while(self, node):
-        cond_bb = self.builder.function.append_basic_block("while_cond")
-        body_bb = self.builder.function.append_basic_block("while_body")
-        end_bb  = self.builder.function.append_basic_block("while_end")
+        fn_ir = self.current_fn if self.current_fn else self.builder.function
+        cond_bb = fn_ir.append_basic_block("while_cond")
+        body_bb = fn_ir.append_basic_block("while_body")
+        end_bb  = fn_ir.append_basic_block("while_end")
 
         self.builder.branch(cond_bb)
-
-        # condition block
         self.builder.position_at_end(cond_bb)
-        cond_val = node.condition.accept(self)
+        cond_val = node.cond.accept(self)
         self.builder.cbranch(cond_val, body_bb, end_bb)
 
-        # body block
         self.builder.position_at_end(body_bb)
-        node.body_block.accept(self)
+        node.body.accept(self)
         if not self.builder.block.is_terminated:
             self.builder.branch(cond_bb)
 
-        # end block
         self.builder.position_at_end(end_bb)
 
-    def visit_block(self, node):
-        for stmt in node.stmts:
-            stmt.accept(self)
-        if node.exit:
-            node.exit.accept(self)
+    def visit_fn_call(self, node):
+        # Self-method call (inside a member function, calling another method on self)
+        if getattr(node, 'self_method', None) is not None:
+            mfn = node.self_method
+            struct_node = self.current_struct_node
+            ir_fn = self.ir_functions[f"{struct_node.name}.{mfn.name}"]
+            self_ptr = getattr(self, '_self_ptr', None)
+            arg_vals = []
+            for arg, param in zip(node.args, mfn.params):
+                v = arg.accept(self)
+                arg_vals.append(self.coerce(v, arg.type, param.type_name))
+            return self.builder.call(ir_fn, [self_ptr] + arg_vals)
+        # Built-in: read()
+        if node.name == "read":
+            # Allocate a temporary i32, call scanf("%d", &tmp), return loaded value
+            tmp_ptr = self.alloca_in_entry(I32, "read_tmp")
+            fmt_ptr = self.builder.gep(fmt_scan, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(scanf, [fmt_ptr, tmp_ptr])
+            return self.builder.load(tmp_ptr, name="read_val")
+        ir_fn = self.ir_functions[node.name]
+        # Find FnDeclNode to get param types for coercion
+        # We stored them in checker.functions; access via node.type set by checker
+        arg_vals = []
+        for arg in node.args:
+            v = arg.accept(self)
+            arg_vals.append((v, arg.type))
+
+        # Coerce args to param types
+        fn_decl_node = self.fn_nodes[node.name]
+        coerced = []
+        for (v, have), param in zip(arg_vals, fn_decl_node.params):
+            coerced.append(self.coerce(v, have, param.type_name))
+
+        return self.builder.call(ir_fn, coerced)
+
+    def visit_string_lit(self, node):
+        """Return pointer to the string's characters (for codegen)."""
+        text_bytes = node.value.encode('utf-8') + b'\0'
+        gv = _get_str_global(text_bytes, f"strlit_{len(_struct_str_globals)}")
+        return self.builder.gep(gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+
+    def _emit_print_struct(self, struct_node, ptr, is_top_level):
+        """Emit printf calls to print a struct value at ptr.
+        If is_top_level: ends with }\\n. Otherwise ends with } (no newline)."""
+        # Print "TypeName{"
+        open_text = (struct_node.name + "{").encode('utf-8') + b'\0'
+        open_gv = _get_str_global(open_text, f"stropen_{struct_node.name}_{len(_struct_str_globals)}")
+        open_ptr = self.builder.gep(open_gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        fmt_s_ptr = self.builder.gep(fmt_plain_str, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+        self.builder.call(self.printf, [fmt_s_ptr, open_ptr])
+
+        # Print each field
+        for idx, f in enumerate(struct_node.fields):
+            if idx > 0:
+                # print ", "
+                sep_ptr = self.builder.gep(fmt_field_sep, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [sep_ptr])
+            # print "fieldname: "
+            label_text = (f.name + ": ").encode('utf-8') + b'\0'
+            label_gv = _get_str_global(label_text, f"strlabel_{struct_node.name}_{f.name}_{len(_struct_str_globals)}")
+            label_ptr = self.builder.gep(label_gv, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_s_ptr, label_ptr])
+            # get the field pointer
+            field_ptr = self.builder.gep(ptr, [ir.Constant(I32, 0), ir.Constant(I32, idx)], name=f.name)
+            if f.type_name in self.struct_defs:
+                # nested struct
+                self._emit_print_struct(self.struct_defs[f.type_name], field_ptr, is_top_level=False)
+            elif f.type_name == "bool":
+                field_val = self.builder.load(field_ptr, name=f.name)
+                true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                str_ptr = self.builder.select(field_val, true_ptr, false_ptr)
+                self.builder.call(self.printf, [fmt_s_ptr, str_ptr])
+            elif f.type_name == "i64":
+                field_val = self.builder.load(field_ptr, name=f.name)
+                fmt_i64_ptr = self.builder.gep(fmt_field_i64, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_i64_ptr, field_val])
+            else:  # i32
+                field_val = self.builder.load(field_ptr, name=f.name)
+                fmt_int_ptr = self.builder.gep(fmt_field_int, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+                self.builder.call(self.printf, [fmt_int_ptr, field_val])
+
+        # Print closing "}" or "}\n"
+        if is_top_level:
+            close_ptr = self.builder.gep(fmt_struct_close, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [close_ptr])
+        else:
+            close_ptr = self.builder.gep(fmt_struct_close_inline, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [close_ptr])
+
+    def visit_print(self, node):
+        """Emit printf call for print(expr), print(string), or print(struct)."""
+        have = node.arg.type
+        if isinstance(node.arg, StringLitNode):
+            # String literal: print text as-is followed by newline
+            str_ptr = node.arg.accept(self)
+            fmt_ptr = self.builder.gep(fmt_print_str, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        elif have in self.struct_defs:
+            # Struct: get pointer and emit struct printf sequence
+            ptr = self.get_lvalue_ptr(node.arg)
+            self._emit_print_struct(self.struct_defs[have], ptr, is_top_level=True)
+        elif have == "bool":
+            val = node.arg.accept(self)
+            true_ptr = self.builder.gep(fmt_true, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            false_ptr = self.builder.gep(fmt_false, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            str_ptr = self.builder.select(val, true_ptr, false_ptr)
+            fmt_ptr = self.builder.gep(fmt_print_bool, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, str_ptr])
+        elif have == "i32":
+            val = node.arg.accept(self)
+            fmt_ptr = self.builder.gep(fmt_print_i32, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, val])
+        else:  # i64
+            val = node.arg.accept(self)
+            fmt_ptr = self.builder.gep(fmt_print_int, [ir.Constant(I32, 0), ir.Constant(I32, 0)])
+            self.builder.call(self.printf, [fmt_ptr, val])
+
+
 
     def visit_binop(self, node):
         left_val = node.left.accept(self)
@@ -939,6 +2351,13 @@ class CodeGenVisitor:
             return self.builder.mul(left_val, right_val)
 
     def visit_var(self, node):
+        if node.decl in self.symbols:
+            ptr = self.symbols[node.decl]
+            return self.builder.load(ptr, name=node.name)
+        if self.current_fn is not None and hasattr(self, '_param_ptrs') and node.name in self._param_ptrs:
+            return self.builder.load(self._param_ptrs[node.name], name=node.name)
+        if self.current_fn is not None and hasattr(self, '_field_ptrs') and node.name in self._field_ptrs:
+            return self.builder.load(self._field_ptrs[node.name], name=node.name)
         ptr = self.symbols[node.decl]
         return self.builder.load(ptr, name=node.name)
 

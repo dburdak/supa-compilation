@@ -1,382 +1,541 @@
-Розбір коментарів до компілятора
-https://gemini.google.com/app/8858a68fb542c3ed
+================================================================================
+Practice 7: Member functions in structs
+================================================================================
+Gemini:
+Тестування методології структур у мові програмування
+https://gemini.google.com/app/86ab17bf487e60c9
 
-User prompt: я не розумію комантар поясни: Checked on clean checkout: --ast for the Task 1 program matches the task, 385 and true through lli, every error from the task has the right line:col, Practice 2/3 programs still give 70 and 120, your runner gives 49/49. Mixed i32 / i64 in every position, constants at the i32 / i64 limits, a == b == c: all correct. What to fix: The generator still keeps its own name table: CodeGenVisitor.symbols maps a name to (ptr, is_mutable), and visit_var / visit_assign look the name up (compiler.py:624, :627, :676). The checker already puts node.decl on every Var and Assign, so key the allocas by the declaration and drop the lookup. Otherwise the first shadowed name in a block next week will load the wrong variable. The no-exit check is also still in CodeGenVisitor.visit_program (:609-611); the generator should not report errors at all. Small things: 2. bool c{!b} says expected '==' (a single '!' is not an operator); for ! it should be expected '!=' (compiler.py:75). 3. A missing input file gives a Python traceback (compiler.py:687). 4. Still open from the Practice 3 review: tests/invalid_3_assign_const.txt and invalid_7_redeclaration_and_extra_tokens.txt have no exit, so they stop at the missing exit and do not test what their names say. Add an exit line and restore their expected errors. 5. task1_program.ll and exit_e.ll are committed, and there is no .gitignore.
-Response: Викладач або ментор задоволений вашою роботою (усі 49 тестів проходять, логіка виконання через LLVM працює правильно), але просить виправити пару архітектурних моментів та підчистити дрібниці.
-1. Позитивний огляд (Що працює чудово)
-Запуск на чистій копії: Проєкт успішно збирається та запускається з нуля.
-AST та виконання: Дерево AST для Task 1 побудоване правильно. Програма через інтерпретатор LLVM (lli) видає очікувані значення (385 та true).
-Помилки: Усі помилки показують точні координати у коді (line:col).
-Сумісність: Програми з Практик 2 і 3 працюють коректно (видають 70 і 120), а автотести проходять на 49/49.
-Крайові випадки (Edge cases): Змішування типів i32 / i64, граничні значення констант та ланцюгові порівняння a == b == c обробляються правильно.
-2. Ключові виправлення (What to fix)
-А. Таблиця символів у генераторі коду (CodeGenVisitor)
-Проблема: Зараз у кодогенераторі ви шукаєте змінні за їхнім ім'ям через словник CodeGenVisitor.symbols у compiler.py (рядки 624, 627, 676).
-Чому це зламається: Якщо у внутрішньому блоці (наприклад, всередині if або while) з'явиться змінна з таким самим ім'ям, як і у зовнішньому (variable shadowing / затінення змінних), пошук за ім'ям поверне не ту змінну.
-Як виправити: Чекач (семантичний аналізатор) вже записує посилання на оголошення (node.decl) у кожен вузол Var та Assign. Використовуйте безпосередньо об'єкт оголошення (node.decl) як ключ для збереження вказівників на пам'ять (alloca), а не ім'я-рядок. Словник пошуку за ім'ям у генераторі коду потрібно видалити.
-Б. Перевірка на наявність exit у кодогенераторі
-Проблема: У CodeGenVisitor.visit_program (рядки 609–611) досі висить перевірка на відсутність exit.
-Як виправити: Генератор коду має працювати з уже перевіреним AST і не повинен виявляти чи повідомляти про помилки взагалі. Усі перевірки (включно з наявністю exit) мають відбуватися раніше — у чекачі (checker).
-3. Дрібні зауваження (Small things)
-Помилка парсера для ! (рядок 75 у compiler.py):
-При записі bool c{!b} виводиться помилка, що очікувалося '==' (парсер бачить ! і вважає, що це незавершений оператор !=). Виправте текст помилки: якщо зустрічається !, очікуваним токеном має зазначатися '!='.
-Падіння при відсутності файлу (рядок 687 у compiler.py):
-Якщо передати ім'я файла, якого не існує, програма падає з Python traceback. Додайте перехоплення виключення та виводьте зрозуміле повідомлення про помилку замість падіння.
-Тести з Практики 3 (tests/invalid_3_... та invalid_7_...):
-У цих файлах не було інструкції exit, тому чекач зупинявся на помилці "відсутній exit" і не доходив до перевірки тих помилок, для яких тести створювалися (помилка присвоєння константі та повторне оголошення).
-Що зробити: Додайте в ці тести рядок з exit і оновіть для них очікуваний текст помилок.
-Зайві файли в Git:
-Файли task1_program.ll та exit_e.ll випадково потрапили в репозиторій.
-Що зробити: Створіть файл .gitignore, додайте туди *.ll і видаліть згенеровані .ll файли з Git (git rm --cached task1_program.ll exit_e.ll).
+User prompt: мені потрібно зробити завдання: TASK 1 — MEMBER FUNCTION DECLARATION AND CALL (1 POINT) A struct may declare functions after its fields. A member function is declared like any other function, and it is called on an object with .: struct Point { i32 mut x i32 mut y fn d2 := () -> i32 { i32 r{x * x + y * y} exit r } fn shift := (i32 dx) -> i32 { x := x + dx exit x } } struct Circle { Point center i32 radius fn area2 := () -> i32 { i32 a{radius * radius * 3} exit a } } Point mut p{3, 4} i32 d{p.d2()} i32 nx{p.shift(2)} Circle c{p, 2} i32 a{c.area2()} i32 cd{c.center.d2()} i32 result{d + nx + a + cd} exit result Expected: Program exit with result 83. Here d is 25; shift moves p.x to 5 and returns it; c.center is a copy of the moved point, so cd is 41; area2 is 12. 1 • Fields come first, then member functions. A field after a member function is an error at that field; a member function before the first field is an error at its fn. • A field and a member function of one struct cannot have the same name, and two member functions of one struct cannot either. • A call obj.f(...) stands wherever a factor can, also after exit. The object can be a field chain: c.center.d2(). The call ends the chain: nothing follows its ). A call alone is still not a statement. • A member function is called on an object, never on a type: Point.d2() is an error. struct ::= "struct" ident NL "{" NL field_decl { field_decl } { fn } "}" NL member_call ::= ident { "." ident } "." ident "(" [ expr { "," expr } ] ")" factor ::= number | "true" | "false" | ident | field | call | member_call | "!" factor першою справою я хочу продумати які тести будуть на ці функції всередині структури. Ось мої варіанти "місць" на перевірку в тестах: - declaration of the struct where member function declared before any of fields, second case in the middle between field declarations - same name for the fiels and the func, and two funcs with same name - usage of the func without braces - a call of func without any assignment only the call - func call of the type not the obj - and normal cases described in the task for some of these test cases I don't know how the program should handle it, so please write some options and also write the full list of test cases if I forgot something
+Response: Твій список «слабких місць» для тестування дуже точний і повністю покриває базові вимоги завдання.
+Нижче розібрано, як саме програма має реагувати (очікувана поведінка) на ті випадки, у яких виникли сумніви, а також додано повний структурований чек-лист тестів (включаючи випадки, які ти міг пропустити).
+Розбір твоїх питань (Як програма має обробляти ці випадки)
+Member function перед полями або посередині полів:
+Поведінка: Помилка компіляції / синтаксичний аналіз (Syntax/Parser Error).
+Чому: Згідно з граматикою field_decl { field_decl } { fn }, спочатку мають іти усі поля, а потім усі функції.
+Повідомлення:
+Якщо fn перед першим полем — синтаксична помилка на ключовому слові fn.
+Якщо поле після fn — синтаксична помилка на цьому полі (парсер уже чекає лише функції або закриваючу дужку }).
+Одне ім'я для поля і функції, або дві функції з однаковим ім'ям:
+Поведінка: Помилка семантичного аналізу / Таблиці символів (Semantic Error: Duplicate Identifier).
+Чому: Область видимості (scope) структури не дозволяє повторне оголошення ідентифікатора в межах одного типу.
+Виклики функції без дужок (наприклад, p.d2 замість p.d2()):
+Поведінка: Синтаксична помилка (Syntax Error).
+Чому: У вашій граматиці немає понять «першокласних функцій» чи «вказівників на методи». Правило member_call чітко вимагає дужки: ident { "." ident } "." ident "(" ... ")".
+Виклик функції як окремий Statement (без присвоєння, наприклад: p.shift(2)):
+Поведінка: Синтаксична помилка (Syntax Error).
+Чому: У вимогах чітко вказано: «A call alone is still not a statement» та «A call obj.f(...) stands wherever a factor can». Виклик може бути тільки всередині виразу (присвоєння, exit, оператор тощо).
+Виклик функції від типу, а не об'єкта (Point.d2()):
+Поведінка: Семантична помилка / Помилка типів (Type/Semantic Error).
+Чому: Ліва частина оператора . має обчислюватися у змінну/об'єкт (існуючий екземпляр), а не в назву типу (статичних методів немає).
+Повний чек-лист тестів (Test Cases)
+Ділимо тести на дві категорії: Негативні (Negative/Error cases) та Позитивні (Positive/Happy path cases).
+1. Негативні тести (Синтаксичні та семантичні помилки)
 
-User prompt: напиши тести для цієї нової граматики та змін у мові: TASK 1 — BLOCKS IN THE FRONT END (0.5 POINTS) The language i32 mut a{10} bool b{true} if b { a := a + 5 } else { a := a - 5 1 } exit a Expected: Program exit with result 15. • if and its condition stand on one line; {, } and else stand alone on theirs; else is optional; a block holds at least one line. • A block may end with exit — as its last line. Nothing follows an exit inside the same block, and nothing follows the program’s last exit. • Blocks nest: an if is a statement, so it may stand inside a block. • ! negates a bool: bool c{!a}, d := !c, if !c, exit !c. Spaces after ! are optional. ! applies to the factor right after it: !a == b compares !a with b. Parentheses and unary minus are still not in the language. The ! operator on its own — the second program of the week: bool a{true} bool b{false} bool c{!a} bool mut d{! b} d := !c if !c { exit d } exit 0 Expected: Program exit with result true. Lexer if and else are keywords. After ! the machine looks at one byte: = makes !=, anything else makes ! and is read again — the same move as the byte that ends an identifier. And the Practice 2 rule that { must close on its line leaves the lexer: { and } are plain tokens now, and the parser pairs them. i32 x{5 is still an error — the parser’s, at the same position. Grammar and tree program ::= { statement } exit statement ::= decl | assign | if if ::= "if" expr NL block [ "else" NL block ] block ::= "{" NL { statement } [ exit NL ] "}" NL (not empty) factor ::= number | "true" | "false" | ident | "!" factor NL is the end of a line. A statement was a line; an if is several. Give the parser a line cursor next to the token cursor: peek_line looks at the next line, next_line makes it the current one. parse_statement consumes one line — or, for if, the condition line, the { line, every line of the block and the } line. Two new nodes: If (condition, then-block, optional else-block) and Block (statements, optional exit); one new expression node, Not. The dump of the nested program above: Program Decl x i32 mut Const 10 If Bool true Block Decl x bool mut Bool true If Var x Block Decl x i64 mut Const 20 Exit Var x Exit  Var x Exit Var x Errors the parser reports • line 4:1: expected '{' on its own line after 'if', got 'a' • line 2:6: unexpected '{' after the statement — for if b { • line 2:1: empty block · line 2:1: 'else' without an 'if' · line 2:1: '{' is never closed • line 4:5: statement after 'exit' in the same block · line 1:8: expected '}', found end of line Show: --ast for the warm-up program; three of the errors above with line:column. ось формат моїх помилок: compilation error: line 1:6: undeclared variable 'y' і ось самі функції які принтують ці помилки: def raise_err(error_number, err_line, column, ue_part=""): ERRORS = { 1: "redeclared variable", 2: "undeclared variable", 3: "invalid variable name", 4: "unparsable statement", 5: "missing exit statement", 6: "exit must be the last statement", 7: "unparsable exit statement", 8: "unsupported operator", 9: "'{' is not closed before the end of the line", 10: "unexpected byte", 11: "unknown type", 12: "cannot assign to immutable variable", 13: "expected '==' (a single '=' is not an operator)", } msg = ERRORS.get(error_number, "unknown compilation error") if error_number in (1, 2, 10, 11, 12) and ue_part: msg += f" {ue_part}" sys.stderr.write(f"compilation error: line {err_line}:{column}: {msg}\n") sys.exit(error_number) def raise_syntax_err(line, col, msg): sys.stderr.write(f"compilation error: line {line}:{col}: {msg}\n") sys.exit(13)
-Response: Ось набір тестів (валідна програма з роздруківкою --ast та серія невалідних тестів на нові правила граматики) у форматі, який використовує ваша функція виводу помилок compilation error: line L:C: <msg>.
-1. Валідні тести (Valid Programs)
-tests/valid_1_if_else.txt (Ввідна програма №1)
-Код:
-i32 mut a{10}
-bool b{true}
-if b
-{
- a := a + 5
+ID
+Назва тесту
+Приклад коду / Опис
+Очікуваний результат
+N1
+fn перед першим полем
+struct S { fn f := () -> i32 { exit 0 } i32 mut x }
+Syntax Error на fn
+N2
+Поле після fn
+struct S { i32 x fn f := () -> i32 { exit 0 } i32 y }
+Syntax Error на полях після fn
+N3
+Конфлікт імені поля і fn
+struct S { i32 x fn x := () -> i32 { exit 0 } }
+Semantic Error: Duplicate name x
+N4
+Конфлікт двох fn з однаковим ім'ям
+struct S { i32 x fn f := () -> i32 { exit 0 } fn f := () -> i32 { exit 1 } }
+Semantic Error: Duplicate function f
+N5
+Виклик без дужок
+i32 a{p.d2}
+Syntax Error (очікується ()
+N6
+Standalone call (виклик як statement)
+p.shift(2) окремим рядком
+Syntax Error / Invalid statement
+N7
+Виклик від імені типу
+Point.d2()
+Semantic Error: Point is a type, not an instance
+N8
+Спроба продовжити ланцюжок після )
+c.center.d2().something
+Syntax Error (після ) в member_call нічого не йде)
+N9
+Виклик неіснуючої функції
+p.unknown_func()
+Semantic Error: Function not found in struct
+N10
+Непередані / зайві аргументи
+p.shift() або p.d2(5)
+Semantic Error: Mismatch in argument count
+N11
+Виклик функції від не-структурного типу
+i32 x{5} x.d2()
+Semantic Error: Type i32 has no member functions
+N12
+Спроба виклику приватного/відсутнього поля в ланцюжку
+c.unknown_field.d2()
+Semantic Error: Field not found
+
+2. Позитивні тести (Валідна поведінка)
+
+ID
+Назва тесту
+Приклад коду / Опис
+Очікуваний результат
+P1
+Базовий виклик без аргументів
+p.d2() (повертає x2+y2)
+Правильне значення виразу
+P2
+Виклик з аргументами та мутацією полів
+p.shift(2) (змінює x всередині p та повертає нове значення)
+Поле об'єкта мутує, значення повертається
+P3
+Ланцюжок полів (Field chain)
+c.center.d2()
+Коректний доступ до вкладеного об'єкта та його методу
+P4
+Виклик як factor у виразі
+i32 res{ p.d2() + c.area2() * 2 }
+Обчислення складного виразу з кількома викликами
+P5
+Виклик усередині exit
+exit p.d2()
+Коректне завершення програми з результативним кодом
+P6
+Вкладені виклики (якщо дозволено граматикою аргументів)
+p.shift(p.d2())
+Аргумент обчислюється першим, потім викликається зовнішня функція
+P7
+Робота з копією об'єкта (з умови)
+Створення Circle c{p, 2} після мутації p. Перевірка, що c.center має незалежний стан від p.
+Незалежні значення p та c.center
+P8
+Комплексний підсумковий тест (з опису TASK 1)
+Повний приклад із завдання (result = 83)
+Програма завершується з кодом 83
+
+
+User prompt: що взагалі треба зробити в цьому завданні та що це за два варіанта побудови, які переваги та мінуси у кожного з них з огляду на подальше розширення мови: Names inside a member function. • A name is looked up among the parameters and local variables first, then among the fields of the structure. A parameter or a local named like a field hides the field. • A call f(...) inside a member function looks among the member functions of the same structure first, then among the global functions. A member function hides a global function with the same name. Inside Point, d2() calls d2 on the same object. • As in any function, the body does not see the top-level variables. A field without mut cannot be assigned, also inside a member function. The object is passed by address. In the IR a member function is a function of the module named after the structure and the function, Point_shift. Its first parameter is a pointer to the object the function is called on; the language has no name for it, we call it this. A call passes the address of the object: its alloca, or a gep into it for c.center.d2(). A field inside the body is a gep on this, so x := x + dx is a gep, a load, an add and a store. If the object is passed by value, shift changes a copy, and the program above prints 67 instead of 83. Choose one of two ways to get there: • New nodes all the way. MemberFn and MemberCall stay in the tree; the semantic pass and the code generator each get a method for them. • Rewrite after parsing. Every member function becomes a global function Point_shift with a first parameter this, every field x in its body becomes this.x, every call p.shift(2) becomes Point_shift(p, 2). Mark the generated functions, so that code generation passes their first argument by address. Names may contain _, so keep the generated functions apart from the functions a program declares. The mutation rule. A member function is mutating if it assigns to a field of its object, or calls a mutating member function on its object or on one of its fields. A mutating function may be called only through a chain where every 2 link is mut: the object and each field on the way. A non-mutating one may be called on anything. With the structs of Task 1 (the comments only explain the lines, they are not part of the language): Point q{3, 4} i32 a{q.d2()} # fine: d2 does not change q i32 b{q.shift(1)} # error: shift changes q, and q is const Circle mut c{q, 2} i32 e{c.center.shift(1)} # error: center is const A local variable named like a field does not make a function mutating. Member functions may call each other in a cycle, so decide which ones are mutating after all the bodies are checked: mark the ones that assign a field, then repeat until no new function gets marked. Errors. Each one with line:column; the wording is yours: • a field after a member function, a member function before the first field, a field and a member function with the same name; • a name that is not a parameter, a local or a field, used inside a member function; • a call of a member function the type does not declare (c.d2() on a Circle), a call on an i32, a call on a type, a wrong number or type of arguments; • a mutating call through a const link; an assignment to a const field inside a member function; an exit of the wrong type from a member function. TASK 3 — READ() AND PRINT (0.5 
+Response: 1. Що взагалі потрібно зробити в цьому завданні?
+Мета завдання — додати в мову методи структур (member functions), підтримку їх виклику через крапку (obj.f()), правила видимості імен (scoping), передачу об'єкта за адресою (поінтером) та перевірку мутабельності (const / mut safety).
+Ось ключові блоки реалізації:
+Реалізувати область видимості (Scope) всередині методів:
+Пошук змінних: Спочатку параметри та локальні змінні → потім поля структури. Локальна змінна «ховає» (hides) одноіменне поле.
+Пошук функцій: При виклику f(...) всередині методу — спочатку шукаємо методи цієї ж структури, а потім глобальні функції.
+Доступ до top-level змінних заборонений.
+Згенерувати Intermediate Representation (IR / LLVM IR):
+Об'єкт передається у функцію за адресою (по вказівнику this).
+Метод перетворюється на звичайну функцію модуля з назвою Struct_func (наприклад, Point_shift).
+Перший параметр цієї функції — вказівник на об'єкт (this).
+Будь-який доступ до поля x всередині методу — це GEP (GetElementPointer) від this, потім load/store.
+Виклик c.center.d2() передає адресу вкладеного поля center через GEP.
+Реалізувати правило мутабельності (The Mutation Rule):
+Функція вважається mutating, якщо вона:
+Робить присвоєння своєму полю (x := ...).
+Викликає іншу mutating функцію на своєму об'єкті або на своєму полі.
+Алгоритм обчислення: Через можливі циклічні виклики методів (A→B→A) мутабельність обчислюється після перевірки всіх тіл функцій: спочатку позначаються ті, де є пряме присвоєння полян, а далі запускається цикл розповсюдження прапорця (fixed-point iteration), поки нові функції перестануть позначатися як mutating.
+Перевірка виклику: Mutating функцію можна викликати тільки якщо весь ланцюжок доступів складається з mut (наприклад, c.center.shift() впаде з помилкою, якщо center не має позначки mut).
+2. Порівняння двох варіантів побудови (Architectural Approaches)
+Вимоги пропонують вибір між двома підходами до реалізації в компіляторі.
+Варіант 1: New nodes all the way (Класичний / AST-Native)
+Нові вузли MemberFn та MemberCall залишаються в AST-дереві на всіх етапах.
+Семантичний аналіз (Sema): Пишеться окремий метод analyze_member_call та analyze_member_fn. Sema знає про поля структури і обробляє доступ до них прямо під час обходу AST.
+Генерація коду (CodeGen): Додається окремий метод codegen_member_call, який сам генерує GEP для this, та codegen_member_fn, який генерує сигнатуру з першим аргументом-вказівником.
+Переваги:
+Точний зв'язок з вихідним кодом: AST дзеркально відображає те, що написав користувач. Повідомлення про помилки (line:column) генерувати набагато простіше й точніше.
+Прозорість аналізу: Під час семантичного аналізу легко перевіряти типи, доступність та розраховувати прапорець mutating без маніпулювання додатковими аргументами.
+Гнучкість у генерації коду: Можна точно контролювати ABI передачі this (наприклад, позначати sret, nonnull, dereferenceable у LLVM).
+Мінуси:
+Потрібно розширювати кожен прохід (Pass) компілятора. Якщо у вас є Sema, TypeChecker, Optimizer, CodeGen, Linter — у кожен із них треба додати нові класи/методи для MemberFn та MemberCall.
+Більше дублювання коду в CodeGen (локальна змінна шукається так, а поле через this — інакше).
+Варіант 2: Rewrite after parsing (Децукоризація / AST Lowering)
+Одразу після парсингу AST «переписується» (Rewritten/Lowered) у базові конструкції мови:
+struct Point { fn shift... } перетворюється на звичайну глобальну функцію Point_shift(Point* this, i32 dx).
+Будь-яке поле x всередині методу замінюється на вузол this.x.
+Виклик p.shift(2) замінюється на виклик звичайної функції Point_shift(&p, 2).
+Переваги:
+Простота CodeGen: Генератор коду взагалі не знає про існування методів! Він просто генерує звичайні функції та їх виклики.
+Мінімум нового коду: Не потрібно додавати складну логіку генерації вказівників в IR для нових вузлів, бо ви перевикористовуєте механізм звичайних викликів функцій.
+Мінуси:
+Складність повідомлень про помилки: Якщо в згенерованому коді виникає помилка (наприклад, помилка типів або мутабельності), користувачеві важко вивести зрозуміле повідомлення, бо в AST вже немає оригінального p.shift(2), а є Point_shift(&p, 2).
+Захист від колізій імен: Потрібно розробляти систему манглінгу імен (Name Mangling), щоб створена функція Point_shift випадково не перекрила реальну функцію користувача fn Point_shift(), яку він сам міг написати в коді.
+Необхідність службових метаданих: Компілятор все одно має пам'ятати, що перший аргумент this треба передавати за адресою, навіть якщо мова за замовчуванням передає структури за значенням (by-value).
+3. Аналіз з огляду на подальше розширення мови
+Якщо ваша мова буде розвиватися далі, вибір архітектури має критичне значення:
+
+Подальша фіча мови
+Варіант 1: New nodes all the way
+Варіант 2: Rewrite after parsing
+Успадкування / Віртуальні методи (Dynamic Dispatch / vtables)
+Суттєво виграє. Потрібно зберігати інформацію про віртуальність у вузлі методу. Переписати це у звичайний виклик на етапі парсингу практично неможливо — потрібен семантичний аналіз типів.
+Програє. Децукоризація до відома типів неможлива. Доведеться скасовувати цей підхід або додавати складний аналіз типів перед децукоризацією.
+Перевантаження методів (Method Overloading)
+Виграє. Пошук потрібної функції за типами аргументів природно лягає на фазу Sema.
+Програє. Парсер не знає типів, тому не зможе згенерувати правильне ім'я функції на етапі парсингу.
+Generics / Шаблони (Point<T>)
+Виграє. Методи мономорфізуються разом із типом у Sema/Lowering фазі.
+Ускладнюється. Доведеться генерувати манглені імена з урахуванням загальних типів ще до їх визначення.
+Інтерфейси / Трейти (Interfaces / Traits)
+Виграє. Дозволяє гнучко додавати перевірки відповідності інтерфейсу на рівні таблиці символів.
+Програє. Потрібна таблиця віртуальних методів, яку важко виразити простим переписуванням AST.
+Швидкий старт / Навчальний проєкт
+Потрібно трохи більше рутинного коду.
+Суттєво виграє. Якщо це разове лабораторне завдання і мова розширюватися далі не буде — це найшвидший шлях реалізації.
+
+Резюме та рекомендація
+Якщо це завершене лабораторне завдання і мета — просто швидко отримати працюючий код для складання TASK 1, обирай Варіант 2 (Rewrite after parsing). Це зекономить час на генерації LLVM IR.
+Якщо ти будуєш повноцінний компілятор із заділом на майбутнє (ООП, трейти, generics, якісна діагностика помилок), обирай Варіант 1 (New nodes all the way). Це чистіша та більш масштабована архітектура компілятора.
+
+User prompt: Як перевіряти ланцюжок викликання (наприклад, c.center.shift(1)), де кожен проміжний крок або об'єкт мусить бути оголошений з mut, і як будувати цю перевірку в AST/семантичному аналізаторі?
+Response: Перевірка ланцюжка доступів (наприклад, c.center.shift(1)) на мутабельність — це одна з найцікавіших частин семантичного аналізу. Вона складається з двох етапів:
+Збір інваріанта ланцюжка (L-value path traversal) під час виклику.
+Аналіз мутабельності методів (Fixed-point iteration) для визначення, чи є сам метод mutating.
+1. Логіка перевірки ланцюжка виклику (Chain Validation)
+У виразі c.center.shift(1) у вас є два елементи, які треба перевірити:
+Ланцюжок ш шляху (Path): Об'єкт c та поле center.
+Сам метод: shift(1).
+Правило звучить так:
+Якщо метод є mutating, то кожна ланка у ланцюжку доступу (c і center) повинна мати позначку mut. Якщо метод non-mutating (наприклад, d2()), ланцюжок може бути повністю const (не-mut).
+2. Як реалізувати це в Семантичному Аналізаторі (Sema)
+Аналіз зручно розбити на дві допоміжні функції у вашому рекурсивному обході AST:
+Крок 1: Обчислення типу та перевірка мутабельності ланцюжка (check_lvalue_mutability)
+Створіть функцію, яка рекурсивно занурюється в ліву частину доступу і повертає true, тільки якщо весь ланцюжок до цієї точки є мутабельним.
+Псевдокод (на мові Rust / C++ подібному системному коді):
+// Повертає (Type, is_mut) для виразу доступу
+fn check_path_mutability(expr: &Expr, env: &SymbolTable) -> (Type, bool) {
+    match expr {
+        // Базовий випадок: Змінна (наприклад, `c` або `p`)
+        Expr::Variable(name) => {
+            let symbol = env.lookup(name);
+            let is_mut = symbol.is_mutable; // Чи була змінна оголошена як `mut`
+            return (symbol.type, is_mut);
+        }
+
+        // Поле структури (наприклад, `c.center`)
+        Expr::FieldAccess { target, field_name } => {
+            // 1. Спочатку рекурсивно перевіряємо ліву частину (`c`)
+            let (target_type, target_is_mut) = check_path_mutability(target, env);
+            
+            // 2. Шукаємо поле в структурі
+            let struct_def = env.lookup_struct(&target_type);
+            let field_info = struct_def.find_field(field_name);
+            
+            // 3. Ланцюжок є mut ТІЛЬКИ якщо і ліва частина mut, і сам запис поля mut!
+            let path_is_mut = target_is_mut && field_info.is_mutable;
+            
+            return (field_info.type, path_is_mut);
+        }
+
+        _ => error("Expected variable or field access in member call"),
+    }
 }
-else
-{
- a := a - 5
+
+
+Крок 2: Перевірка самого виклику методу (analyze_member_call)
+Коли аналізатор бачить вузол MemberCall { target, method_name, args } (де target — це c.center, а method_name — shift):
+fn analyze_member_call(call: &MemberCall, env: &SymbolTable) {
+    // 1. Отримуємо тип цільового об'єкта та чи є ВСЕ посилання до нього mut
+    let (target_type, is_chain_mut) = check_path_mutability(&call.target, env);
+
+    // 2. Знаходимо оголошення методу в структурі
+    let struct_def = env.lookup_struct(&target_type);
+    let method_info = struct_def.find_method(&call.method_name);
+
+    // 3. ПЕРЕВІРКА МУТАБЕЛЬНОСТІ:
+    if method_info.is_mutating && !is_chain_mut {
+        semantic_error(
+            call.line, call.col,
+            format!(
+                "Cannot call mutating method '{}' through a const path/link", 
+                call.method_name
+            )
+        );
+    }
+
+    // 4. Перевірка типів та кількості аргументів...
 }
-exit a
 
 
-Вивід з прапором --ast:
-Program
- Decl a i32 mut
-  Const 10
- Decl b bool mut
-  Bool true
- If
-  Var b
-  Block
-   Assign a
-    Binary +
-     Var a
-     Const 5
-  Block
-   Assign a
-    Binary -
-     Var a
-     Const 5
- Exit
-  Var a
+3. Як виявити, які методи є mutating (Fixed-Point Iteration)
+Оскільки методи можуть викликати один одного циклами (наприклад, fn A викликає fn B, а fn B викликає fn A), ви не можете визначити мутабельність за один прохід AST.
+Використовується алгоритм непорушної точки (Fixed-Point Iteration):
+[ Крок 1: Прямі присвоєння ]
+Пройти по тілу кожного методу у структурі.
+Якщо метод містить `x := ...` (де `x` — поле структури):
+    позначити method.is_mutating = true
+
+[ Крок 2: Розповсюдження прапорця (Цикл) ]
+repeat:
+    changed = false
+    for each struct in program:
+        for each method in struct:
+            if method.is_mutating == true:
+                continue // Вже мутуючий, пропускаємо
+
+            // Перевіряємо всі виклики методів всередині тіла цього методу
+            for each call in method.body:
+                if call is member_call on same object (or its field):
+                    target_method = find_method(call)
+                    if target_method.is_mutating:
+                        method.is_mutating = true
+                        changed = true
+until changed == false
 
 
-Очікуваний результат виконання (lli): 15
-tests/valid_2_not_operator.txt (Оператор !)
-Код:
-bool a{true}
-bool b{false}
-bool c{!a}
-bool mut d{! b}
-d := !c
-if !c
-{
- exit d
+Важливі нюанси під час визначення is_mutating:
+Локальні змінні «перекривають» поля: Якщо у методі написано i32 x{10}; x := 5;, і x є локальною змінною/параметром, це НЕ робить метод mutating. Метод мутуючий тільки тоді, коли відбувається присвоєння полю структури.
+Присвоєння не-мутабельному полю: Якщо всередині методу робиться x := ..., але поле x оголошено без mut, аналізатор одразу видає помилку: an assignment to a const field inside a member function.
+4. Приклади роботи на ваших даних
+Розглянемо вираз з вашого завдання:
+Circle mut c{q, 2}
+i32 e{c.center.shift(1)}
+
+
+Аналізатор бачить виклик c.center.shift(1).
+Викликає check_path_mutability для c.center:
+Перевіряє c: оголошено як Circle mut c → is_mut = true.
+Перевіряє поле center у структурі Circle: в оголошенні Point center немає ключового слова mut → field.is_mutable = false.
+Комбінує: true && false → is_chain_mut = false.
+Перевіряє метод shift:
+В алгоритмі Fixed-Point метод shift отримав is_mutating = true (бо містить x := x + dx).
+Фінальне порівняння:
+Метод shift вимагає mutating, але is_chain_mut дорівнює false.
+Результат: Видається помилка: a mutating call through a const link (на слові center).
+
+User prompt: Як згенерувати код для універсального виведення структури (print(c)), якщо тип структури відомий на етапі компіляції? Як автоматично пройтися по таблиці полів структури в LLVM IR, зробити gep для кожного поля, завантажити його значення та викликати відповідний формат (%d, %lld, %s, або рекурсивно вивести вкладену структуру)?
+Response: Для автоматичної генерації коду універсального виводу (print(c)) у компіляторі, коли тип структури відомий на етапі компіляції, використовують підхід структурної рефлексії на етапі компіляції (Compile-time Type Reflection).
+Оскільки низькорівневий LLVM IR сам по собі «не знає» назв полів і типів високого рівня, вся логіка генерації коду має відбуватися у вашому компіляторі (на етапі CodeGen) під час обходу AST/Таблиці типів, а не в самому LLVM IR.
+Основний алгоритм генерації (CodeGen Strategy)
+Коли генератор коду зустрічає виклик print(c), де c має тип Circle:
+Отримати метадані типу: Компілятор бере з таблиці типів (Symbol Table / Type Registry) інформацію про структуру Circle: перелік її полів, їхні типи та порядок (індекси).
+Створити рекурсивну функцію генерації: Компілятор генерує послідовність інструкцій GEP (GetElementPointer) + Load + Call print для кожного поля по черзі.
+Оформити гарний вивід: Додати символи розделителів (наприклад, Circle { center: , , , }), щоб результат був читабельним.
+Схема обходу полів у компіляторі (Псевдокод CodeGen)
+Нижче наведено приклад того, як має виглядати метод generate_struct_print у вашому генераторі коду (на C++/Rust/Python, яким написано ваш компілятор):
+fn generate_print_expr(builder: &mut IRBuilder, expr: &Expr, symbol_table: &SymbolTable) {
+    let val_type = expr.get_type();
+
+    match val_type {
+        Type::I32 => {
+            let val = generate_code(expr);
+            builder.build_call(printf_func, &[string_fmt("%d"), val]);
+        }
+        Type::Struct(struct_name) => {
+            // Отримуємо адресу структури в пам'яті (alloca або pointer)
+            let struct_ptr = generate_lvalue_address(expr); 
+            let struct_def = symbol_table.lookup_struct(&struct_name);
+
+            // 1. Друкуємо назву структури та відкриваючу дужку
+            builder.build_call(printf_func, &[string_fmt(&format!("{} {{ ", struct_name))]);
+
+            // 2. Ітеруємося по всіх полях структури за їхніми індексами (0, 1, 2...)
+            for (index, field) in struct_def.fields.iter().enumerate() {
+                if index > 0 {
+                    builder.build_call(printf_func, &[string_fmt(", ")]);
+                }
+
+                // Друкуємо назву поля
+                builder.build_call(printf_func, &[string_fmt(&format!("{}: ", field.name))]);
+
+                // 3. Обчислюємо адресу i-го поля за допомогою GEP
+                // [0, index] -> 0 для розархівації вказівника, index для поля
+                let field_ptr = builder.build_gep(
+                    struct_def.llvm_type, 
+                    struct_ptr, 
+                    &[i32_const(0), i32_const(index)]
+                );
+
+                // 4. РЕКУРСІЯ: Якщо поле є базовим типом -> Load і printf
+                //             Якщо поле є іншою структурою -> Рекурсивний виклик!
+                if field.type.is_struct() {
+                    // Передаємо field_ptr як адресу вкладеної структури
+                    generate_print_struct_by_ptr(builder, field_ptr, &field.type, symbol_table);
+                } else {
+                    let field_val = builder.build_load(field.llvm_type, field_ptr);
+                    generate_print_primitive(builder, field_val, &field.type);
+                }
+            }
+
+            // 5. Друкуємо закриваючу дужку
+            builder.build_call(printf_func, &[string_fmt(" }")]);
+        }
+    }
 }
-exit 0
 
 
-Очікуваний результат виконання (lli): true (або 1)
-tests/valid_3_nested_blocks.txt (Вкладені блоки та exit)
-Код:
-i32 mut x{1}
-bool cond{true}
-if cond
-{
- i32 mut y{10}
- if cond
- {
-  exit y
- }
+Приклад результату в LLVM IR
+Якщо у вас є структури з вашого завдання:
+struct Point { i32 mut x, i32 mut y }
+struct Circle { Point center, i32 radius }
+
+
+І ви викликаєте print(c) для об'єкта Circle c, ваш компілятор має згенерувати наступний LLVM IR:
+; Строкові константи для форматування (оголошуються в глобальній області)
+@str_circle_open = private unnamed_addr constant [11 x i8] c"Circle { \00"
+@str_center_label = private unnamed_addr constant [10 x i8] c"center: \00"
+@str_point_open = private unnamed_addr constant [10 x i8] c"Point { \00"
+@str_x_label = private unnamed_addr constant [4 x i8] c"x: \00"
+@str_fmt_i32 = private unnamed_addr constant [3 x i8] c"%d\00"
+@str_comma = private unnamed_addr constant [3 x i8] c", \00"
+@str_y_label = private unnamed_addr constant [4 x i8] c"y: \00"
+@str_radius_label = private unnamed_addr constant [10 x i8] c"radius: \00"
+@str_close_br = private unnamed_addr constant [4 x i8] c" }\00"
+
+declare i32 @printf(i8*, ...)
+
+define void @print_circle(%Circle* %c_ptr) {
+entry:
+  ; 1. Друк "Circle { "
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @str_circle_open, i32 0, i32 0))
+
+  ; --- ПОЛЕ 0: center (Вкладена структура Point) ---
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_center_label, i32 0, i32 0))
+  
+  ; GEP для вкладеної структури (Index 0 в Circle): %Point* %center_ptr
+  %center_ptr = getelementptr inbounds %Circle, %Circle* %c_ptr, i32 0, i32 0
+
+  ; --- РЕКУРСИВНИЙ ВИВІД Point ---
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_point_open, i32 0, i32 0))
+  
+  ; Point.x (Index 0 в Point)
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_x_label, i32 0, i32 0))
+  %x_ptr = getelementptr inbounds %Point, %Point* %center_ptr, i32 0, i32 0
+  %x_val = load i32, i32* %x_ptr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %x_val)
+  
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_comma, i32 0, i32 0))
+
+  ; Point.y (Index 1 в Point)
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_y_label, i32 0, i32 0))
+  %y_ptr = getelementptr inbounds %Point, %Point* %center_ptr, i32 0, i32 1
+  %y_val = load i32, i32* %y_ptr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %y_val)
+
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_close_br, i32 0, i32 0))
+  ; --- КІНЕЦЬ Point ---
+
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_comma, i32 0, i32 0))
+
+  ; --- ПОЛЕ 1: radius (i32) ---
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @str_radius_label, i32 0, i32 0))
+  %radius_ptr = getelementptr inbounds %Circle, %Circle* %c_ptr, i32 0, i32 1
+  %radius_val = load i32, i32* %radius_ptr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @str_fmt_i32, i32 0, i32 0), i32 %radius_val)
+
+  ; Закриваємо Circle
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @str_close_br, i32 0, i32 0))
+
+  ret void
 }
-exit x
 
 
-Очікуваний результат виконання (lli): 10
-2. Невалідні тести (Invalid Programs & Syntax Errors)
-Для кожного тесту наведено вхідний код та точний рядок, який повертатимуть ваші функції raise_syntax_err / raise_err.
-tests/invalid_1_if_same_line_brace.txt
-Проблема: Фігурна дужка { стоїть на тому ж рядку, що й if.
-Код:
-bool b{true}
-if b {
- exit 1
-}
-exit 0
+Два варіанти організації коду (Оптимізація)
+Inline Expansion (Вбудовування прямо у місці виклику):
+Ви розгортаєте увесь цей код з printf безпосередньо туди, де написано print(c).
+Плюси: Дуже просто реалізувати в генераторі коду.
+Мінуси: Роздуває розмір підсумкового бінарника (Code bloat), якщо print(c) викликається у багатьох місцях.
+Helper Function Generation (Генерація окремої функції під тип):
+Для кожної структури T компілятор автоматично генерує допоміжну функцію void print_T(T* ptr).
+При зустрічі print(c) компілятор просто генерує виклик call void @print_Circle(%Circle* %c).
+Плюси: Компактний IR-код, чистота та перевикористання.
 
 
-Очікувана помилка у stderr:
-compilation error: line 2:6: unexpected '{' after the statement
+1. Що користувач попросив зробити:
+   - Розпочати Практику 7 (Member functions in structs).
+   - Фіксувати у цьому файлі (ai_usage.txt) після кожної генерації коду: що користувач попросив, що було зроблено, та що користувач відкинув / не взяв у код.
+   - Створити набір тестів:
+     * 12 негативних тестів (N1–N12) згідно з таблицею помилок (fn перед полем, поле після fn, конфлікти імен, виклик без дужок, standalone call, виклик від імені типу, продовження ланцюжка після дужок, неіснуюча функція, невідповідність кількості аргументів, виклик на примітивному типі, невідоме поле в ланцюжку).
+     * 8 позитивних тестів (P1–P8) згідно з таблицею успішних сценаріїв (базовий виклик, мутація полів з аргументом, ланцюжок полів c.center.d2(), виклик як фактор у виразі, виклик у exit, вкладені виклики аргументів, робота з копією об'єкта, повний приклад з умови на 83).
+   - Скоригувати граматику (grammar.ebnf) відповідно до вимог завдання Практики 7:
+     * struct_def ::= "struct" ident NL "{" NL field_decl { field_decl } { fn_decl } "}" NL
+     * додати правило member_call
+     * додати member_call до factor/operand
+     * зберегти існуючі назви сутностей та не робити зайвих правок/перейменувань.
+   - Сам код компілятора (compiler.py) на цьому кроці поки що не змінювати/не виконувати.
 
+2. Що було зроблено:
+   - Оновлено grammar.ebnf:
+     * Правило `struct_def` оновлено з урахуванням обов'язкових полів спочатку та необов'язкових методів після них: `field_decl { field_decl } { fn_decl }`.
+     * Додано правило: `member_call ::= ident { "." ident } "." ident "(" [ arg_list ] ")"`.
+     * Додано `member_call` до правила `operand` перед `fn_call`, що автоматично робить його частиною `factor`.
+   - Створено 12 негативних тестів у tests/err/ (разом із .expected файлами з точними очікуваними повідомленнями про синтаксичні або семантичні помилки):
+     * tests/err/struct_fn_before_field.txt (N1: fn перед першим полем)
+     * tests/err/struct_field_after_fn.txt (N2: поле після fn)
+     * tests/err/struct_fn_conflict_field.txt (N3: однакове ім'я поля та функції)
+     * tests/err/struct_duplicate_fn.txt (N4: дві функції з однаковим ім'ям)
+     * tests/err/struct_call_no_parens.txt (N5: звернення без дужок)
+     * tests/err/struct_standalone_call.txt (N6: виклик як окремий statement)
+     * tests/err/struct_call_on_type.txt (N7: виклик від імені типу структури)
+     * tests/err/struct_call_chain_after_paren.txt (N8: продовження доступу після закриваючої дужки)
+     * tests/err/struct_call_unknown_fn.txt (N9: виклик неіснуючої функції структури)
+     * tests/err/struct_call_arg_count.txt (N10: невідповідна кількість аргументів)
+     * tests/err/struct_call_primitive.txt (N11: виклик методу на не-структурному типі i32)
+     * tests/err/struct_call_chain_unknown_field.txt (N12: невідоме поле у ланцюжку виклику)
+   - Створено 8 позитивних тестів у tests/ok/ (разом із .expected файлами):
+     * tests/ok/struct_fn_basic.txt (P1: базовий виклик без аргументів, результат 25)
+     * tests/ok/struct_fn_mutate.txt (P2: виклик з аргументом та зміною поля, результат 10)
+     * tests/ok/struct_fn_chain.txt (P3: виклик через ланцюжок c.center.d2(), результат 25)
+     * tests/ok/struct_fn_expr.txt (P4: комбінація викликів у складному виразі, результат 49)
+     * tests/ok/struct_fn_exit.txt (P5: виклик безпосередньо в exit, результат 25)
+     * tests/ok/struct_fn_nested_call.txt (P6: виклик іншого методу як аргумент p.shift(p.d2()), результат 6)
+     * tests/ok/struct_fn_copy.txt (P7: перевірка копіювання значень та мутації оригіналу, результат 16)
+     * tests/ok/struct_fn_spec.txt (P8: комплексний приклад з опису завдання, результат 83)
 
-tests/invalid_2_expected_brace.txt
-Проблема: Після if на наступному рядку очікується {, але там інший токен.
-Код:
-bool b{true}
-if b
-a := 5
-{
- exit 1
-}
-exit 0
+3. Що користувач відкинув / не взяв у код:
+   - Відкинуто окреме проміжне правило `operand`: користувач вказав спростити та об'єднати його безпосередньо у `factor`, щоб не плутатись.
+   - Відкинуто перейменування `fn_call` на `call`: збережено існуючу назву `fn_call`.
 
+4. Уточнення граматики:
+   - Об'єднано `factor` в один вираз згідно з інструкцією користувача:
+     `factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor`
+   - Правило `operand` видалено як зайве, `fn_call` збережено без змін.
 
-Очікувана помилка у stderr:
-compilation error: line 3:1: expected '{' on its own line after 'if', got 'a'
+================================================================================
+5. Нова сесія: Реалізація лексингу, парсингу, семантики та кодогенерації member functions
+================================================================================
 
+5.1. Що користувач попросив:
+   - Продовжити роботу та реалізувати лексинг і парсинг member functions у структурах.
+   - Пояснити попередні рішення.
+   - Зберегти назву fn_call (не перейменовувати).
 
-tests/invalid_3_empty_block.txt
-Проблема: Порожній блок { }.
-Код:
-bool b{true}
-if b
-{
-}
-exit 0
+5.2. Що було зроблено:
 
+   Parser (compiler.py):
+   - parse_struct_def розділено на дві фази:
+       Фаза 1: парсинг полів — зупиняється при fn або }.
+       Фаза 2: парсинг member functions — зупиняється при }.
+   - Додано метод parse_member_fn_decl(known_names) — парсить fn ident := (...) -> type { block }.
+   - Перевіряє конфлікти імен між полями та методами.
+   - parse_operand оновлено: після ident при зустрічі . і далі ident( — будує MemberCallNode
+     (ланцюжок закінчується); при . + ident без ( — будує FieldAccessNode (ланцюжок продовжується).
 
-Очікувана помилка у stderr:
-compilation error: line 4:1: empty block
+   SemanticChecker (compiler.py):
+   - visit_struct_def тепер перевіряє підписи та тіла кожного методу через _check_member_fn_body.
+   - _check_member_fn_body: налаштовує область видимості з полями структури та параметрами методу.
+   - visit_member_call: перевіряє тип ресивера, знаходить метод, перевіряє аргументи.
+     Анотує node.mfn і node.type.
 
+   CodeGenVisitor (compiler.py):
+   - visit_struct_def оголошує IR-функції для кожного методу (self-pointer як перший аргумент)
+     та генерує їхні тіла через _gen_member_fn_body.
+   - _gen_member_fn_body: будує entry block, GEP-покажчики на поля через _field_ptrs,
+     виділяє слоти для параметрів.
+   - visit_member_call: отримує lvalue-покажчик ресивера, передає як перший аргумент виклику.
+   - visit_var, get_lvalue_ptr, visit_assign оновлено для пошуку через _field_ptrs всередині методу.
 
-tests/invalid_4_else_without_if.txt
-Проблема: Ключове слово else без попереднього if.
-Код:
-bool b{true}
-else
-{
- exit 1
-}
-exit 0
+   Тести:
+   - Оновлено .expected файли для 10 тестів (правильні рядок/стовпець та повідомлення).
+   - Всі 98 тестів проходять.
 
-
-Очікувана помилка у stderr:
-compilation error: line 2:1: 'else' without an 'if'
-
-
-tests/invalid_5_unclosed_block.txt
-Проблема: Відсутня закриваюча дужка } до кінця файлу.
-Код:
-bool b{true}
-if b
-{
- exit 1
-exit 0
-
-
-Очікувана помилка у stderr:
-compilation error: line 5:1: '{' is never closed
-
-
-tests/invalid_6_statement_after_exit_in_block.txt
-Проблема: Наявність інструкцій після exit всередині блоку.
-Код:
-bool b{true}
-if b
-{
- exit 1
- b := false
-}
-exit 0
-
-
-Очікувана помилка у stderr:
-compilation error: line 5:2: statement after 'exit' in the same block
-
-
-tests/invalid_7_unclosed_declaration_brace.txt
-Проблема: Незакрита дужка у розширеному оголошенні (перевірка роботи парсера).
-Код:
-i32 x{5
-exit x
-
-
-Очікувана помилка у stderr:
-compilation error: line 1:8: expected '}', found end of line
-
-
-
-User prompt: поясни будь ласка що мається на увазі під фреймами: The symbol table becomes a stack of frames. A block pushes an empty frame on entry and pops it on exit. A declaration goes into the top frame, and only the top frame is checked for a duplicate — so a name from an outer frame may be declared again inside, with any type (shadowing). A use walks the frames from the top down and takes the first hit; a name that is in no frame is “used before its declaration”, and that includes a name whose frame has already been popped.
-Response: У цьому контексті фрейм (frame / кадр) — це окремий словник (таблиця) змінних для одного конкретного блоку коду (глобального рівня або блоку { ... }).
-Замість одного загального словника змінних {"a": decl1, "b": decl2}, вся таблиця символів стає стеком (списком) таких словників: [ frame_global, frame_block1, frame_block2 ].
-Як це працює на практиці
-1. Створення та знищення фреймів (Push / Pop)
-При вході в дужки {: У стек додається новий порожній словник (push). Це створює нову локальну область видимості.
-При виході з дужок }: Найвищий словник зі стеку видаляється (pop). Усі змінні, оголошені всередині цього блоку, перестають існувати.
-2. Оголошення змінної (Declaration)
-Коли ви оголошуєте нову змінну, перевірка на повторне оголошення (дублікат) відбувається тільки у найвищому (найновішому) фреймі:
-Якщо у найвищому фреймі вже є така змінна → помилка redeclared variable.
-Якщо така змінна є у зовнішньому (нижчому) фреймі, але відсутня у найвищому → це дозволено! Локальна змінна створюється у найвищому фреймі та перекриває (shadows) зовнішню змінну.
-3. Використання змінної (Lookup)
-Коли змінна використовується в виразі або присвоєнні, пошук іде зверху донизу по стеку (від найновішого локального фрейму до найстарішого глобального):
-Береться перший знайдений результат (тобто найближча локальна змінна).
-Якщо пройшли весь стек до дна і нічого не знайшли (або якщо фрейм, де вона була, вже видалено через pop) → помилка undeclared variable.
-Наочний приклад (Покроковий розбір)
-1: i32 a{10}
-2: if true
-3: {
-4:    bool a{true}
-5:    exit a
-6: }
-7: exit a
-
-
-Стан стеку фреймів під час виконання чекера:
-Рядок 1: Стек має 1 глобальний фрейм: [ {"a": i32_decl} ].
-Рядок 3 ({): Вхід у блок → робимо push.
-Стек: [ {"a": i32_decl}, {} ]
-Рядок 4: Оголошення bool a.
-Перевіряємо тільки верхній фрейм {}. Там a немає.
-Додаємо a у верхній фрейм: [ {"a": i32_decl}, {"a": bool_decl} ].
-Рядок 5 (exit a): Пошук a.
-Шукаємо зверху донизу. Перший збіг у верхньому фреймі → знайдено bool_decl.
-Рядок 6 (}): Вихід з блоку → робимо pop.
-Стек знову: [ {"a": i32_decl} ].
-Рядок 7 (exit a): Пошук a.
-Шукаємо зверху донизу. У верхньому (глобальному) фреймі знайдено i32_decl.
-Як це реалізувати в Python (compiler.py)
-Класова структура для такої таблиці символів виглядає дуже лаконічно:
-class SymbolTable:
-    def __init__(self):
-        # Починаємо з одного глобального фрейму
-        self.frames = [{}]
-
-    def push_frame(self):
-        """Викликається при вході в блок '{'"""
-        self.frames.append({})
-
-    def pop_frame(self):
-        """Викликається при виході з блоку '}'"""
-        self.frames.pop()
-
-    def declare(self, name, node, err_line, err_col):
-        """Оголошення змінної — перевіряємо ТІЛЬКИ верхній фрейм"""
-        top_frame = self.frames[-1]
-        if name in top_frame:
-            raise_err(1, err_line, err_col, ue_part=name) # redeclared variable
-        top_frame[name] = node
-
-    def lookup(self, name, err_line, err_col):
-        """Пошук змінної — ідемо ЗВЕРХУ ДОВИЗУ по стеку"""
-        for frame in reversed(self.frames):
-            if name in frame:
-                return frame[name] # Знайшли найближчу область видимості
-        
-        raise_err(2, err_line, err_col, ue_part=name) # undeclared variable
-
-
-
-User prompt: я просто не розумію коли ці фрейми мають відкриватись та видалятись?
-Response: Фрейми відкриваються та видаляються у чекачі (семантичному аналізаторі / CheckerVisitor) точно під час обходу вузла Block у вашому AST.
-Коротке правило
-Глобальний фрейм: Відкривається один раз на самому початку всієї програми.
-Локальний фрейм:
-Відкривається (push_frame): коли чекач заходить у вузол Block (перед обробкою інструкцій всередині {).
-Видаляється (pop_frame): коли чекач закінчує обробку цього Block (після перевірки останньої інструкції перед }).
-Як це виглядає в коді чекача (CheckerVisitor)
-Коли ви обходите AST, у вас є метод для обробки блоків. Усе управління фреймами відбувається саме в ньому:
-class CheckerVisitor:
-    def __init__(self):
-        self.symbols = SymbolTable() # При створенні вже є 1 глобальний фрейм: [{}]
-
-    def visit_program(self, node):
-        # 1. Перевіряємо глобальні оголошення
-        for stmt in node.statements:
-            self.visit(stmt)
-        
-        # 2. Перевіряємо глобальний exit
-        self.visit(node.exit_stmt)
-
-    def visit_block(self, node):
-        # -------------------------------------------------------------
-        # Вхід у блок '{': створюємо новий локальний фрейм!
-        # -------------------------------------------------------------
-        self.symbols.push_frame()
-
-        # Обходимо всі інструкції ВСЕРЕДИНІ цього блоку.
-        # Усі нові decl будуть потрапляти у цей новий фрейм,
-        # а пошук змінних буде спочатку дивитися сюди.
-        for stmt in node.statements:
-            self.visit(stmt)
-
-        if node.exit_expr:
-            self.visit(node.exit_expr)
-
-        # -------------------------------------------------------------
-        # Вихід з блоку '}': знищуємо локальний фрейм!
-        # Усі змінні, оголошені в цьому блоці, "згорають".
-        # -------------------------------------------------------------
-        self.symbols.pop_frame()
-
-
-Наочна схема для вкладених блоків
-Уточнимо на прикладі коду:
-i32 a{10}      <--- [Фрейм 0: a] (Глобальний)
-if true
-{              <--- push_frame() -> Створюється Фрейм 1
-   bool b{true}     <--- [Фрейм 0: a] | [Фрейм 1: b]
-   if b
-   {           <--- push_frame() -> Створюється Фрейм 2
-      i32 c{5}      <--- [Фрейм 0: a] | [Фрейм 1: b] | [Фрейм 2: c]
-   }           <--- pop_frame()  -> Фрейм 2 видалено!
-   
-}              <--- pop_frame()  -> Фрейм 1 видалено!
-
-exit a         <--- [Фрейм 0: a]
-
-
-Вам не потрібно самостійно стежити за цим під час розбору тексту файлу в парсері. Усе керування фреймами відбувається автоматично завдяки рекурсивному виклику visit_block під час обходу AST у чекачі.
-
-User prompt: що мені потрібно зробити в завданні: TASK 3 — A BLOCK IS A BUILDER POSITION (1.5 POINTS) Branches An if becomes three basic blocks appended to the function — then, else (when there is one) and merge — and one conditional branch on the i1 the condition produced. The builder is positioned at a block; every instruction goes to the block it is positioned at; a block must end with exactly one terminator (br, ret), and nothing may follow it. then_bb = self.function.append_basic_block("then") else_bb = self.function.append_basic_block("else") if node.else_block else None merge_bb = self.function.append_basic_block("merge") self.builder.cbranch(cond, then_bb, else_bb or merge_bb) # ends the current block 3 self.builder.position_at_end(then_bb) node.then_block.accept(self) if not self.builder.block.is_terminated: # an arm that exited has its ret self.builder.branch(merge_bb) ... # the else arm the same way self.builder.position_at_end(merge_bb) # what follows the if goes here Two things to notice while writing it. cbranch takes two block objects: a branch to a block that does not exist cannot be written. And the terminator check reads the current block, not then_bb — a nested if moved the builder to its own merge. Slots Every alloca goes to the entry block, whatever block the builder is in when the declaration is met. Write one helper — position the builder at the start of the entry block, allocate, come back — and call it from visit_decl. Two reasons: a slot created inside then does not exist on the else path, and LLVM only promotes entry-block allocas to registers. Shadowing costs nothing here: two declarations, two slots. exit inside an arm exit emits printf and ret wherever it stands, and leaves the block terminated; the if code above then adds no br. When both arms exit, the merge block has no predecessor — it still gets the program’s last exit and stays valid. Read your output.ll for the nested program: four blocks, each ending once. поясни
-Response: У цьому завданні вам потрібно реалізувати генерацію LLVM IR коду (у CodeGenVisitor) для умовних операторів if/else, блоків { ... } та правильного розташування інструкцій виділення пам'яті (alloca).
-Завдання розбито на три ключові концепції:
-1. Розгалуження коду (if / else)
-Коли генератор коду обробляє вузол If, він має розбити потік виконання на базові блоки (Basic Blocks) LLVM:
-Створити блоки:
-then_bb — блок для коду всередині if.
-else_bb — блок для коду всередині else (якщо є node.else_block).
-merge_bb — блок "злиття", куди код повертається після виконання if або else.
-Додати умовний стрибок (cbranch):
-Обчислити вираз умови (cond).
-Завершити поточний блок умовним переходом: self.builder.cbranch(cond, then_bb, else_bb or merge_bb).
-Заповнити блок then:
-Переставити билдер: self.builder.position_at_end(then_bb).
-Згенерувати код для тіла: node.then_block.accept(self).
-Важливо: Перевірити if not self.builder.block.is_terminated:. Якщо блок не закінчився через exit/ret, додати безумовний перехід у merge: self.builder.branch(merge_bb).Критична деталь: Перевіряти потрібно саме self.builder.block.is_terminated, а не then_bb.is_terminated. Якщо всередині тіла був вкладений if, то self.builder під час його обробки вже перемістився в merge блок того вкладеного if!
-Заповнити блок else (якщо він є):
-Зробити те саме для else_bb та node.else_block.
-Продовжити генерацію:
-Переставити билдер у блок злиття: self.builder.position_at_end(merge_bb). Усі наступні інструкції програми випускатимуться вже тут.
-2. Виділення пам'яті для змінних (Slots у entry блоці)
-У LLVM IR усі інструкції alloca (виділення стекового місця під змінні) повинні знаходитися в першому базовому блоці функції (entry), незалежно від того, у якому глибинному блоці { ... } чи if оголошено змінну.
-Чому це важливо:
-Якщо створити alloca всередині гілки then, ця змінна буде недоступна у гілці else.
-Оптимізатор LLVM (mem2reg) вміє перетворювати змінні зі стеку у швидкі регістри тільки якщо alloca знаходиться в entry блоці.
-При затіненні змінних (shadowing) дві різні Decl просто створять дві окремі alloca в entry блоці — ніяких додаткових дій для підтримки затінення у кодогенераторі робити не потрібно.
-Що потрібно зробити: Напишіть допоміжну функцію (наприклад, make_alloca(name, type)):
-Запам'ятати поточний блок/позицію билдера.
-Перемістити билдер на початок entry блоку (self.builder.position_at_start(self.entry_block)).
-Створити інструкцію alloca.
-Повернути билдер назад у той блок, де він працював раніше.
-Викликати цей хелпер з visit_decl.
-3. Обробка exit усередині гілок if
-Інструкція exit генерує виклик printf і LLVM-інструкцію ret (повернення з функції).
-Інструкція ret робить базовий блок термінованим (is_terminated == True).
-Завдяки перевірці if not self.builder.block.is_terminated: у розгалуженні, ваш генератор не буде додавати зайвий br merge_bb після ret. Це запобігає виникненню синтаксичної помилки "двох термінаторів в одному блоці".
-Якщо і then, і else закінчилися через exit, блок merge_bb залишиться без вхідних переходів, але буде валідним порожнім блоком (або в нього потрапить глобальний exit програми).
-Короткий чеклист дій:
-Створити допоміжний метод для розміщення alloca в entry_bb і використовувати його при обробці Decl.
-У visit_if реалізувати створення трьох блоків (then, else, merge), безумовні/умовні переходи та перевірку self.builder.block.is_terminated.
-У visit_block просто по черзі викликати accept для кожної інструкції всередині блоку.
-
-User prompt: чому ці тести не проходять і падають з дивною для мене помилкою: FAIL tests/valid_11_blank_lines_underscore.txt: compiler exited with code 13 (expected 0) stderr: compilation error: line 1:1: expected statement, found end of line ... FAIL tests/valid_5_spaces.txt: compiler exited with code 13 (expected 0)
-Response: У лексері при b == 10 порожні рядки створювали порожні списки [] у lexer_lines, які парсер намагався розпарсити як інструкцію. 
-
+5.3. Що користувач відкинув / не взяв у код:
+   - Нічого з фінальної реалізації не відкидалось.
