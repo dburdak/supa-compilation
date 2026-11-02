@@ -55,21 +55,22 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
 ├── compiler.py               # The main compiler (Lexer -> Parser -> SemanticChecker -> CodeGenVisitor)
 ├── grammar.ebnf              # EBNF grammar reference
 ├── ai_usage.txt              # AI interaction log
-└── tests/                    # Test suite containing 4 main sets of tests
+└── tests/                    # Test suite containing compiler and optimization tests
     ├── run_tests.sh          # Bash script to run all autotests
     ├── run_ll.py             # llvmlite JIT fallback execution script
     ├── valid_*.txt           # Valid programs (compiled and executed)
     ├── invalid_*.txt         # Invalid programs (should produce stderr, no .ll)
     ├── ok/                   # Valid programs (widening, control flow, functions, structs)
     │   └── *.txt             # Valid programs testing all language features
-    └── err/                  # Invalid programs (syntax, semantic, type errors)
-        └── *.txt             # Invalid programs testing all error cases
+    ├── err/                  # Invalid programs (syntax, semantic, type errors)
+    │   └── *.txt             # Invalid programs testing all error cases
+    └── opt/                  # Programs testing --remove-unused and output preservation
 ```
 
 ## Usage
 
 ```bash
-python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-checked]
+python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-checked] [--remove-unused]
 ```
 
 - `source_path` (Required): Path to the `.txt` source file.
@@ -77,6 +78,9 @@ python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-check
 - `--tokens` (Optional): Prints the token stream to `stdout` and continues compilation.
 - `--ast` (Optional): Prints the Abstract Syntax Tree (AST) to `stdout` and **exits immediately with code 0** (no semantic checking, no code generation, and no `.ll` file is written).
 - `--ast-checked` (Optional): Performs semantic checking, prints the checked AST (including generated lambda closure structs), and exits without code generation.
+- `--remove-unused` (Optional): After successful semantic checking, removes unused variable declarations and their assignments before AST output or code generation. Without this flag, compilation is unchanged.
+
+The unused-variable pass counts reads by resolved declaration, not by variable name, and repeats after removals until no further declarations become unused. It keeps declarations and assignments whose initializer or assigned value contains a function call or `read()`, since these may have observable effects. A variable that only feeds itself (for example, `k := k + 1`) remains because the right-hand side reads it; this is a limit of read counting, not a proof that the variable affects program output.
 
 ### `--ast` Dump Format
 The AST dump uses indentation to represent the tree structure (each level adds 2 spaces):

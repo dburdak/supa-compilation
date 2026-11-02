@@ -1,0 +1,6 @@
+absent||Decl method_dead i32 const
+absent||Decl if_dead i32 const
+absent||Decl while_dead i32 const
+contains||If
+contains||While
+contains||Assign value

@@ -10,6 +10,8 @@ parser.add_argument("--tokens", action="store_true", help="print the token strea
 parser.add_argument("--ast", action="store_true", help="print the AST tree and exit")
 parser.add_argument("--ast-checked", action="store_true",
                     help="print the AST after semantic checking and exit")
+parser.add_argument("--remove-unused", action="store_true",
+                    help="remove unused local variables after semantic checking")
 
 args = parser.parse_args()
 
@@ -2208,6 +2210,184 @@ class SemanticChecker:
         return node.type
 
 
+def has_call_or_read(node):
+    if node is None:
+        return False
+    if isinstance(node, (FnCallNode, MemberCallNode)):
+        return True
+    if isinstance(node, BinOpNode):
+        return has_call_or_read(node.left) or has_call_or_read(node.right)
+    if isinstance(node, NotNode):
+        return has_call_or_read(node.operand)
+    if isinstance(node, FieldAccessNode):
+        return has_call_or_read(node.obj)
+    if isinstance(node, StructInitNode):
+        return any(has_call_or_read(expr) for expr in node.inits)
+    return False
+
+
+class UseCounter:
+    def __init__(self):
+        self.reads = {}
+        self.declarations = set()
+
+    def read(self, decl):
+        if decl is not None:
+            key = id(decl)
+            self.reads[key] = self.reads.get(key, 0) + 1
+
+    def visit_program(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit is not None:
+            node.exit.accept(self)
+
+    def visit_struct_def(self, node):
+        for method in node.methods:
+            method.body.accept(self)
+
+    def visit_fn_decl(self, node):
+        node.body.accept(self)
+
+    def visit_lambda(self, node):
+        for capture in node.capture_values:
+            capture.accept(self)
+        node.body.accept(self)
+
+    def visit_block(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node is not None:
+            node.exit_node.accept(self)
+
+    def visit_decl(self, node):
+        self.declarations.add(id(node))
+        self.reads.setdefault(id(node), 0)
+        if any(has_call_or_read(expr) for expr in node.inits):
+            self.read(node)
+        for expr in node.inits:
+            expr.accept(self)
+
+    def visit_assign(self, node):
+        if has_call_or_read(node.value):
+            self.read(node.decl)
+        node.value.accept(self)
+
+    def visit_if(self, node):
+        node.cond.accept(self)
+        node.then_block.accept(self)
+        if node.else_block is not None:
+            node.else_block.accept(self)
+
+    def visit_while(self, node):
+        node.cond.accept(self)
+        node.body.accept(self)
+
+    def visit_print(self, node):
+        node.arg.accept(self)
+
+    def visit_exit(self, node):
+        if node.val is not None:
+            node.val.accept(self)
+
+    def visit_var(self, node):
+        self.read(getattr(node, "decl", None))
+
+    def visit_field_access(self, node):
+        node.obj.accept(self)
+
+    def visit_member_call(self, node):
+        node.target_node.accept(self)
+        for arg in node.args:
+            arg.accept(self)
+
+    def visit_fn_call(self, node):
+        if node.rewritten_call is not None:
+            node.rewritten_call.accept(self)
+        else:
+            for arg in node.args:
+                arg.accept(self)
+
+    def visit_struct_init(self, node):
+        for expr in node.inits:
+            expr.accept(self)
+
+    def visit_binop(self, node):
+        node.left.accept(self)
+        node.right.accept(self)
+
+    def visit_not(self, node):
+        node.operand.accept(self)
+
+    def visit_const(self, node):
+        pass
+
+    def visit_bool(self, node):
+        pass
+
+    def visit_string_lit(self, node):
+        pass
+
+
+class UnusedVariablePruner:
+    def __init__(self, dead):
+        self.dead = dead
+        self.removed = False
+
+    def prune(self, program):
+        program.stmts = self.prune_stmts(program.stmts)
+        for stmt in program.stmts:
+            self.prune_nested(stmt)
+        return self.removed
+
+    def prune_stmts(self, stmts):
+        kept = []
+        for stmt in stmts:
+            if isinstance(stmt, DeclNode) and id(stmt) in self.dead:
+                self.removed = True
+                continue
+            if (isinstance(stmt, AssignNode)
+                    and id(getattr(stmt, "decl", None)) in self.dead):
+                self.removed = True
+                continue
+            kept.append(stmt)
+        return kept
+
+    def prune_block(self, block):
+        block.stmts = self.prune_stmts(block.stmts)
+        for stmt in block.stmts:
+            self.prune_nested(stmt)
+
+    def prune_nested(self, stmt):
+        if isinstance(stmt, (FnDeclNode, MemberFnDeclNode)):
+            self.prune_block(stmt.body)
+        elif isinstance(stmt, StructDefNode):
+            for method in stmt.methods:
+                self.prune_block(method.body)
+        elif isinstance(stmt, LambdaNode):
+            self.prune_block(stmt.body)
+        elif isinstance(stmt, IfNode):
+            self.prune_block(stmt.then_block)
+            if stmt.else_block is not None:
+                self.prune_block(stmt.else_block)
+        elif isinstance(stmt, WhileNode):
+            self.prune_block(stmt.body)
+
+
+def remove_unused_variables(tree):
+    while True:
+        counter = UseCounter()
+        tree.accept(counter)
+        dead = {
+            decl_id for decl_id in counter.declarations
+            if counter.reads.get(decl_id, 0) == 0
+        }
+        if not dead:
+            return tree
+        if not UnusedVariablePruner(dead).prune(tree):
+            return tree
+
+
 class CodeGenVisitor:
     def __init__(self, builder, printf_func, fmt_global, generated_lambdas=None):
         self.builder = builder
@@ -2778,6 +2958,9 @@ if args.ast:
 
 checker = SemanticChecker()
 ast.accept(checker)
+
+if args.remove_unused:
+    ast = remove_unused_variables(ast)
 
 if args.ast_checked:
     ast.dump()

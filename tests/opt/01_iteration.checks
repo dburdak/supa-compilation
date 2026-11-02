@@ -1,0 +1,3 @@
+absent||Decl x i32 const
+absent||Decl y i32 const
+contains||Decl z i32 const

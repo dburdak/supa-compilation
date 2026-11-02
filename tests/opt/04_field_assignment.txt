@@ -1,0 +1,7 @@
+struct Box
+{
+i32 mut value
+}
+Box mut dead{0}
+dead.value := 9
+exit 3
