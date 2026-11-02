@@ -1,0 +1,7 @@
+i32 k{3}
+fn update := [k]() -> i32
+{
+k := k + 1
+exit k
+}
+exit update()

@@ -1,0 +1,9 @@
+if true
+{
+fn f := [](i32 x) -> i32
+{
+exit x
+}
+}
+i32 result{f(1)}
+exit result

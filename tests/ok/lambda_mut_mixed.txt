@@ -1,0 +1,12 @@
+i32 constant{5}
+i32 mut state{10}
+fn next := [constant, mut state]() -> i32
+{
+state := state + 1
+exit constant + state
+}
+print(next())
+print(next())
+print(constant)
+print(state)
+exit next()

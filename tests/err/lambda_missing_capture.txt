@@ -1,0 +1,6 @@
+i32 k{3}
+fn use_k := [](i32 y) -> i32
+{
+exit k + y
+}
+exit use_k(1)

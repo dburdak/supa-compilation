@@ -1,0 +1,9 @@
+fn sq := (i32 v) -> i32
+{
+exit v * v
+}
+fn times := [](i32 x) -> i32
+{
+exit x + 1
+}
+exit sq(times)

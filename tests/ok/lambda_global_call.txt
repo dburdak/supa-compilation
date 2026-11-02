@@ -1,0 +1,10 @@
+fn sq := (i32 v) -> i32
+{
+exit v * v
+}
+fn square := [](i32 v) -> i32
+{
+exit sq(v)
+}
+print(square(4))
+exit square(5)

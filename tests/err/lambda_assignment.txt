@@ -1,0 +1,10 @@
+fn first := [](i32 x) -> i32
+{
+exit x
+}
+fn second := [first](i32 x) -> i32
+{
+exit first(x) + 1
+}
+first := second
+exit first(2)

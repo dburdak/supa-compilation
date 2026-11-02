@@ -16,9 +16,11 @@ param_list ::= param { "," param }
 
 param ::= type ident
 
-fn_call ::= ident "(" [ arg_list ] ")"
+fn_call ::= ident "(" [ arg_list ] ")" { postfix_suffix }
 
-member_call ::= ident { "." ident } "." ident "(" [ arg_list ] ")"
+member_call ::= ident { "." ident } "." ident "(" [ arg_list ] ")" { postfix_suffix }
+
+postfix_suffix ::= "." ident [ "(" [ arg_list ] ")" ]
 
 arg_list ::= expr { "," expr }
 
@@ -40,7 +42,7 @@ block ::= "{" NL { statement } [ finish NL ] "}" NL
 
 finish ::= "exit" factor
 
-statement ::= declaration | assignment | if | while
+statement ::= declaration | assignment | if | while | print | lambda
 
 factor ::= number | "true" | "false" | ident | field | fn_call | member_call | "!" factor
 
@@ -49,3 +51,10 @@ expr ::= arith [ ("==" | "!=") arith ]
 arith ::= term { ("+" | "-") term }
 
 term ::= factor { "*" factor }
+
+lambda ::= "fn" ident ":=" "[" [ capture_list ] "]"
+           "(" [ param_list ] ")" "->" type NL block
+
+capture_list ::= capture { "," capture }
+
+capture ::= [ "mut" ] ident

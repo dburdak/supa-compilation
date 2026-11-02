@@ -1,0 +1,16 @@
+i32 mut i{0}
+i32 mut total{0}
+while i != 3
+{
+fn tick := [mut i]() -> i32
+{
+i := i + 1
+exit i
+}
+i32 first{tick()}
+i32 second{tick()}
+total := total + first + second
+i := i + 1
+}
+print(total)
+exit total

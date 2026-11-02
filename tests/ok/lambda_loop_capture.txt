@@ -1,0 +1,13 @@
+i32 mut i{1}
+i32 mut total{0}
+while i != 4
+{
+fn add_i := [i]() -> i32
+{
+exit i
+}
+total := total + add_i()
+i := i + 1
+}
+print(total)
+exit total

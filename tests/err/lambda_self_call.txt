@@ -1,0 +1,5 @@
+fn loop := [](i32 x) -> i32
+{
+exit loop(x)
+}
+exit loop(1)

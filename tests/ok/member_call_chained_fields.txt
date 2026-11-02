@@ -1,0 +1,25 @@
+struct Point
+{
+i32 x
+fn duplicate := () -> Point
+{
+Point result{x}
+exit result
+}
+}
+struct Circle
+{
+Point center
+i32 radius
+fn grown := (i32 amount) -> Circle
+{
+Circle result{{center.x}, radius + amount}
+exit result
+}
+}
+Point p{7}
+Circle c{{4}, 2}
+i32 x{p.duplicate().x}
+print(x)
+print(c.grown(3).radius)
+exit 0

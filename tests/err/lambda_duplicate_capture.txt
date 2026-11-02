@@ -1,0 +1,6 @@
+i32 k{3}
+fn twice := [k, k]() -> i32
+{
+exit k + k
+}
+exit twice()
