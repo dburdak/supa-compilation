@@ -2,8 +2,7 @@
 # run_tests.sh — runs compiler.py against test files.
 #
 # It tests 4 categories:
-# 1. tests/valid_*.txt: must exit 0, write .ll, execute via lli or run_ll.py, and exact match .out
-#    (after stripping "Program exit with result " prefix if present to normalize).
+# 1. tests/valid_*.txt: must exit 0, write .ll, execute via lli or run_ll.py, and exactly match .out.
 #    If .ast / .tokens exist, they must exactly match --ast / --tokens output.
 # 2. tests/invalid_*.txt: must exit non-zero, exact match stderr with .err, write NO .ll file.
 #    If .ast exists, --ast must SUCCEED (exit 0) and exactly match.
@@ -64,12 +63,6 @@ dump_ast() {
     "$PYTHON" "$COMPILER" --ast "$1" 2>/dev/null
 }
 
-normalize_output() {
-    local val="$1"
-    val="${val#Program exit with result }"
-    echo -n "$val"
-}
-
 run_valid_test() {
     local txt="$1"
     local expected_out_file="$2"
@@ -91,18 +84,15 @@ run_valid_test() {
         return
     fi
     
-    local actual_out expected_out norm_actual norm_expected
+    local actual_out expected_out
     local input_file="${txt%.txt}.in"
     actual_out=$(execute_ir "$TMP_LL" "$input_file")
     expected_out=$(cat "$expected_out_file")
     
-    norm_actual=$(normalize_output "$actual_out")
-    norm_expected=$(normalize_output "$expected_out")
-    
-    if [ "$norm_actual" != "$norm_expected" ]; then
+    if [ "$actual_out" != "$expected_out" ]; then
         echo -e "${RED}FAIL${NC} $name: runtime output mismatch"
-        echo "       expected: '$norm_expected'"
-        echo "       actual:   '$norm_actual'"
+        echo "       expected: '$expected_out'"
+        echo "       actual:   '$actual_out'"
         FAIL=$((FAIL + 1))
         return
     fi

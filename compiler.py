@@ -602,8 +602,10 @@ class ExitNode(Node):
 
 
 class Param:
-    def __init__(self, line, col, type_name, name):
+    def __init__(self, line, col, type_name, name, name_line=None, name_col=None):
         self.line, self.col, self.type_name, self.name = line, col, type_name, name
+        self.name_line = name_line if name_line is not None else line
+        self.name_col = name_col if name_col is not None else col
 
 
 class FnDeclNode(StmtNode):
@@ -1140,7 +1142,10 @@ class Parser:
             if name_tok.text in param_names:
                 raise_err(1, name_tok.line, name_tok.col, ue_part=f"'{name_tok.text}'")
             param_names.add(name_tok.text)
-            params.append(Param(type_tok.line, type_tok.col, type_tok.text, name_tok.text))
+            params.append(Param(
+                type_tok.line, type_tok.col, type_tok.text, name_tok.text,
+                name_tok.line, name_tok.col,
+            ))
             if self.peek() is not None and self.peek().kind == "comma":
                 self.eat()
             else:
@@ -1285,7 +1290,6 @@ class Parser:
             # Peek ahead: if next token is '(', it's a plain function call
             if self.pos + 1 < len(self.toks) and self.toks[self.pos + 1].kind == "lparen":
                 node = self.parse_fn_call()
-                return node
             else:
                 self.eat()
                 node = VarNode(tok.line, tok.col, tok.text)
@@ -1303,7 +1307,6 @@ class Parser:
                             args.append(self.parse_expr())
                     self.expect("rparen", "')'")
                     node = MemberCallNode(node.line, node.col, node, f_tok.text, args)
-                    break  # member call ends the chain
                 else:
                     node = FieldAccessNode(dot_tok.line, dot_tok.col, node, f_tok.text)
             return node
@@ -1318,6 +1321,7 @@ class Parser:
                 raise_err(7, tok.line, tok.col)
             else:
                 raise_syntax_err(tok.line, tok.col, f"expected constant or variable, got '{tok.text}'")
+
     def parse_fn_call(self):
         name_tok = self.eat()  # ident
         self.eat()             # '('
@@ -1402,8 +1406,13 @@ class SemanticChecker:
                 return frame[name]
         return None
 
+    def _validate_variable_name(self, name, line, col):
+        if name == "read":
+            self._sem_err(line, col, "'read' is reserved for the built-in function")
+
     def _declare(self, name, decl_node):
         """Register a new variable in current scope (raises if already declared in same block)."""
+        self._validate_variable_name(name, decl_node.line, decl_node.col)
         if name in self.scopes[-1]:
             raise_err(1, decl_node.line, decl_node.col, ue_part=f"'{name}'")
         if self.current_fn is not None and len(self.scopes) == 2 and name in self.scopes[0]:
@@ -1451,10 +1460,12 @@ class SemanticChecker:
 
     def _register_fn_sig(self, node):
         """Register function name + signature without checking body."""
+        self._validate_variable_name(node.name, node.line, node.col)
         if node.name in self.functions or node.name in self.structs or node.name in ("i32", "i64", "bool"):
             raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
         # Validate param and return types
         for p in node.params:
+            self._validate_variable_name(p.name, p.name_line, p.name_col)
             self._validate_type(p.type_name, p.line, p.col)
         self._validate_type(node.ret_type, node.line, node.col)
         self.functions[node.name] = node
@@ -1498,6 +1509,7 @@ class SemanticChecker:
         if node.name in self.structs or node.name in ("i32", "i64", "bool"):
             raise_err(1, node.line, node.col, ue_part=f"'{node.name}'")
         for f in node.fields:
+            self._validate_variable_name(f.name, f.line, f.col)
             if f.type_name == node.name:
                 self._sem_err(f.line, f.col, f"struct '{node.name}' cannot contain itself")
             elif f.type_name not in ("i32", "i64", "bool") and f.type_name not in self.structs:
@@ -1505,7 +1517,9 @@ class SemanticChecker:
         self.structs[node.name] = node
         # Validate method signatures only (bodies checked in pass 2)
         for mfn in node.methods:
+            self._validate_variable_name(mfn.name, mfn.line, mfn.col)
             for p in mfn.params:
+                self._validate_variable_name(p.name, p.name_line, p.name_col)
                 self._validate_type(p.type_name, p.line, p.col)
             self._validate_type(mfn.ret_type, mfn.line, mfn.col)
 
@@ -1519,12 +1533,13 @@ class SemanticChecker:
         self._register_struct_type(node)
         self._check_struct_methods(node)
 
-    def _get_root_name(self, node):
+    @staticmethod
+    def _is_struct_field_reference(node):
         if isinstance(node, VarNode):
-            return node.name
+            return getattr(getattr(node, "decl", None), "is_struct_field", False)
         if isinstance(node, FieldAccessNode):
-            return self._get_root_name(node.obj)
-        return None
+            return SemanticChecker._is_struct_field_reference(node.obj)
+        return False
 
     def _compute_all_mutating(self):
         """Compute is_mutating for all member functions across all structs until stable."""
@@ -1541,119 +1556,84 @@ class SemanticChecker:
 
     def _body_is_mutating(self, struct_node, mfn):
         """Return True if mfn's body contains a field assignment or mutating call on self/fields."""
-        field_names = {f.name for f in struct_node.fields}
-        method_names = {m.name for m in struct_node.methods}
-        return self._block_mutating(mfn.body, field_names, method_names, struct_node)
+        return self._block_mutating(mfn.body, struct_node)
 
-    def _block_mutating(self, block, field_names, method_names, struct_node):
+    def _block_mutating(self, block, struct_node):
         if block is None:
             return False
-        if self._stmts_mutating(block.stmts, field_names, method_names, struct_node):
+        if self._stmts_mutating(block.stmts, struct_node):
             return True
         if block.exit_node is not None and getattr(block.exit_node, 'val', None) is not None:
-            if self._expr_mutating(block.exit_node.val, field_names, method_names, struct_node):
+            if self._expr_mutating(block.exit_node.val, struct_node):
                 return True
         return False
 
-    def _expr_mutating(self, expr, field_names, method_names, struct_node):
+    def _expr_mutating(self, expr, struct_node):
         """Return True if expr contains a call to a mutating method on self or a field."""
         if expr is None:
             return False
         if isinstance(expr, FnCallNode):
-            field = next((f for f in struct_node.fields if f.name == expr.name), None)
-            if field is not None and field.type_name in self.structs:
-                callable_fn = next(
-                    (m for m in self.structs[field.type_name].methods if m.name == "call"),
-                    None,
-                )
-                if callable_fn and getattr(callable_fn, "is_mutating", False):
+            if expr.rewritten_call is not None:
+                if self._expr_mutating(expr.rewritten_call, struct_node):
                     return True
-            elif expr.name in method_names:
-                mfn2 = next((m for m in struct_node.methods if m.name == expr.name), None)
-                if mfn2 and getattr(mfn2, 'is_mutating', False):
-                    return True
-            for arg in expr.args:
-                if self._expr_mutating(arg, field_names, method_names, struct_node):
-                    return True
-        elif isinstance(expr, MemberCallNode):
-            # Check if this is a call on a field of struct_node
-            root = self._get_root_name(expr.target_node)
-            if root and root in field_names:
-                fdef = next((f for f in struct_node.fields if f.name == root), None)
-                if fdef and fdef.type_name in self.structs:
-                    target_sdef = self.structs[fdef.type_name]
-                    member_name = expr.member_name
-                    if any(f.name == member_name for f in target_sdef.fields):
-                        member_name = "call"
-                    mfn2 = next((m for m in target_sdef.methods if m.name == member_name), None)
-                    if mfn2 and getattr(mfn2, 'is_mutating', False):
-                        return True
-            if self._expr_mutating(expr.target_node, field_names, method_names, struct_node):
+            elif getattr(getattr(expr, "self_method", None), "is_mutating", False):
                 return True
             for arg in expr.args:
-                if self._expr_mutating(arg, field_names, method_names, struct_node):
+                if self._expr_mutating(arg, struct_node):
+                    return True
+        elif isinstance(expr, MemberCallNode):
+            if (self._is_struct_field_reference(expr.target_node)
+                    and getattr(getattr(expr, "mfn", None), "is_mutating", False)):
+                return True
+            if self._expr_mutating(expr.target_node, struct_node):
+                return True
+            for arg in expr.args:
+                if self._expr_mutating(arg, struct_node):
                     return True
         elif isinstance(expr, BinOpNode):
-            return (self._expr_mutating(expr.left, field_names, method_names, struct_node) or
-                    self._expr_mutating(expr.right, field_names, method_names, struct_node))
+            return (self._expr_mutating(expr.left, struct_node) or
+                    self._expr_mutating(expr.right, struct_node))
         elif isinstance(expr, NotNode):
-            return self._expr_mutating(expr.operand, field_names, method_names, struct_node)
+            return self._expr_mutating(expr.operand, struct_node)
         elif isinstance(expr, FieldAccessNode):
-            return self._expr_mutating(expr.obj, field_names, method_names, struct_node)
+            return self._expr_mutating(expr.obj, struct_node)
         elif isinstance(expr, StructInitNode):
             for ie in expr.inits:
-                if self._expr_mutating(ie, field_names, method_names, struct_node):
+                if self._expr_mutating(ie, struct_node):
                     return True
         return False
 
-    def _stmts_mutating(self, stmts, field_names, method_names, struct_node):
+    def _stmts_mutating(self, stmts, struct_node):
         for stmt in stmts:
             if isinstance(stmt, AssignNode):
-                # Assignment to a field name of this struct
-                if stmt.name in field_names:
+                if getattr(getattr(stmt, "decl", None), "is_struct_field", False):
                     return True
-                if self._expr_mutating(stmt.value, field_names, method_names, struct_node):
+                if self._expr_mutating(stmt.value, struct_node):
                     return True
             elif isinstance(stmt, DeclNode):
                 for init_expr in (stmt.inits if isinstance(stmt.inits, list) else [stmt.init]):
-                    if init_expr is not None and self._expr_mutating(init_expr, field_names, method_names, struct_node):
+                    if init_expr is not None and self._expr_mutating(init_expr, struct_node):
                         return True
-            elif isinstance(stmt, FnCallNode):
-                field = next((f for f in struct_node.fields if f.name == stmt.name), None)
-                if field is not None and field.type_name in self.structs:
-                    callable_fn = next(
-                        (m for m in self.structs[field.type_name].methods if m.name == "call"),
-                        None,
-                    )
-                    if callable_fn and getattr(callable_fn, "is_mutating", False):
-                        return True
-                elif stmt.name in method_names:
-                    mfn2 = next((m for m in struct_node.methods if m.name == stmt.name), None)
-                    if mfn2 and getattr(mfn2, 'is_mutating', False):
-                        return True
-                for arg in stmt.args:
-                    if self._expr_mutating(arg, field_names, method_names, struct_node):
-                        return True
-            elif isinstance(stmt, MemberCallNode):
-                if self._expr_mutating(stmt, field_names, method_names, struct_node):
+            elif isinstance(stmt, (FnCallNode, MemberCallNode)):
+                if self._expr_mutating(stmt, struct_node):
                     return True
             elif isinstance(stmt, PrintNode):
-                if self._expr_mutating(stmt.arg, field_names, method_names, struct_node):
+                if self._expr_mutating(stmt.arg, struct_node):
                     return True
             elif isinstance(stmt, IfNode):
-                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                if self._expr_mutating(stmt.cond, struct_node):
                     return True
-                if self._block_mutating(stmt.then_block, field_names, method_names, struct_node):
+                if self._block_mutating(stmt.then_block, struct_node):
                     return True
-                if stmt.else_block and self._block_mutating(stmt.else_block, field_names, method_names, struct_node):
+                if stmt.else_block and self._block_mutating(stmt.else_block, struct_node):
                     return True
             elif isinstance(stmt, WhileNode):
-                if self._expr_mutating(stmt.cond, field_names, method_names, struct_node):
+                if self._expr_mutating(stmt.cond, struct_node):
                     return True
-                if self._block_mutating(stmt.body, field_names, method_names, struct_node):
+                if self._block_mutating(stmt.body, struct_node):
                     return True
             elif isinstance(stmt, ExitNode):
-                if stmt.val and self._expr_mutating(stmt.val, field_names, method_names, struct_node):
+                if stmt.val and self._expr_mutating(stmt.val, struct_node):
                     return True
         return False
 
@@ -1667,6 +1647,7 @@ class SemanticChecker:
         field_frame = {}
         for f in struct_node.fields:
             fdecl = DeclNode(f.line, f.col, f.type_name, f.name, f.mutable, None)
+            fdecl.is_struct_field = True
             if getattr(struct_node, "is_lambda", False):
                 fdecl.is_lambda_capture = True
             field_frame[f.name] = fdecl
@@ -1779,17 +1760,20 @@ class SemanticChecker:
             )
 
     def visit_lambda(self, node):
+        self._validate_variable_name(node.name, node.line, node.col)
         seen = set()
         capture_fields = []
         capture_values = []
         for name, token, mutable in node.captures:
+            self._validate_variable_name(name, token.line, token.col)
             if name in seen:
                 self._sem_err(token.line, token.col, f"'{name}' is captured twice")
             seen.add(name)
             if any(param.name == name for param in node.params):
+                param = next(param for param in node.params if param.name == name)
                 self._sem_err(
-                    token.line,
-                    token.col,
+                    param.name_line,
+                    param.name_col,
                     f"lambda parameter '{name}' has the same name as a capture",
                 )
             decl = self._lookup(name)
@@ -1829,6 +1813,7 @@ class SemanticChecker:
         self.lambda_types[type_name] = node.name
 
         for param in node.params:
+            self._validate_variable_name(param.name, param.name_line, param.name_col)
             self._validate_type(param.type_name, param.line, param.col)
         self._validate_type(node.ret_type, node.line, node.col)
         self._check_member_fn_body(struct_node, method)
@@ -2083,6 +2068,18 @@ class SemanticChecker:
             node.type = node.rewritten_call.accept(self)
             return node.type
 
+        if (
+            self.current_lambda is not None
+            and node.name in self.current_lambda.outer_visible_names
+            and node.name not in {field.name for field in self.current_lambda.fields}
+        ):
+            self._sem_err(
+                node.line,
+                node.col,
+                f"'{node.name}' is not captured by lambda "
+                f"'{self.current_lambda.lambda_name}': add it to the capture list",
+            )
+
         # Inside a member function: first look among the struct's own methods
         if self.current_struct is not None:
             mfn = next((m for m in self.current_struct.methods if m.name == node.name), None)
@@ -2110,7 +2107,7 @@ class SemanticChecker:
             node.self_method = None
             return node.type
         if node.name not in self.functions:
-            raise_err(2, node.line, node.col, ue_part=f"'{node.name}'")
+            self._sem_err(node.line, node.col, f"undeclared function '{node.name}'")
         fn = self.functions[node.name]
         if len(node.args) != len(fn.params):
             self._sem_err(node.line, node.col,

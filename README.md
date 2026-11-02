@@ -26,6 +26,10 @@ This version adds full support for user-defined structs, functions, recursion, a
   - Named identified struct types in LLVM IR context (`%"Point" = type { i32, i32 }`).
   - Access to fields via GEP indices computed during semantic analysis.
 
+## Practice 7 Fixes
+
+The built-in `read()` name is reserved for the input function. Member-call results can be followed by field or method access, for example `p.duplicate().x` and `c.grown(3).radius`. Method mutability analysis uses resolved declarations, so a local variable shadowing a struct field does not make the method mutating.
+
 ## Practice 8 Features (Callable Objects)
 
 A struct with a member function named `call` can be invoked like a function (`triple(14)`), with the semantic
@@ -102,3 +106,5 @@ Run tests via `tests/run_tests.sh`:
 ```bash
 ./tests/run_tests.sh
 ```
+
+Runtime output is compared exactly, including the final `Program exit with result ...` line.

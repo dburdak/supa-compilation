@@ -1,0 +1,13 @@
+struct Walker
+{
+i32 mut steps
+fn walk := () -> i32
+{
+i32 mut steps{0}
+steps := steps + 1
+exit steps
+}
+}
+Walker walker{0}
+i32 result{walker.walk()}
+exit result
