@@ -19,7 +19,6 @@ Program
     MemberCall bump
       Var counter
   Print
-    FieldAccess n
-      Var counter
+    Var counter
   Exit
     Const 0

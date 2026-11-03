@@ -14,5 +14,5 @@ exit n
 Counter mut counter{0}
 i32 ignored_bump{counter.bump()}
 i32 ignored_peek{counter.peek()}
-print(counter.n)
+print(counter)
 exit 0
