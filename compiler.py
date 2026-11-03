@@ -11,9 +11,9 @@ parser.add_argument("--ast", action="store_true", help="print the AST tree and e
 parser.add_argument("--ast-checked", action="store_true",
                     help="print the AST after semantic checking and exit")
 parser.add_argument("--remove-unused", action="store_true",
-                    help="remove unused local variables after semantic checking")
+                    help="remove unused local variables and global functions after semantic checking")
 
-args = parser.parse_args()
+args = parser.parse_intermixed_args()
 
 I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64)
 I1 = ir.IntType(1)
@@ -2227,9 +2227,11 @@ def has_call_or_read(node):
 
 
 class UseCounter:
-    def __init__(self):
+    def __init__(self, global_functions=None):
         self.reads = {}
         self.declarations = set()
+        self.global_functions = set(global_functions or ())
+        self.function_calls = {}
 
     def read(self, decl):
         if decl is not None:
@@ -2302,6 +2304,12 @@ class UseCounter:
             arg.accept(self)
 
     def visit_fn_call(self, node):
+        if (
+            node.rewritten_call is None
+            and getattr(node, "self_method", None) is None
+            and node.name in self.global_functions
+        ):
+            self.function_calls[node.name] = self.function_calls.get(node.name, 0) + 1
         if node.rewritten_call is not None:
             node.rewritten_call.accept(self)
         else:
@@ -2386,6 +2394,28 @@ def remove_unused_variables(tree):
             return tree
         if not UnusedVariablePruner(dead).prune(tree):
             return tree
+
+
+def remove_unused_functions(tree):
+    while True:
+        functions = [
+            stmt for stmt in tree.stmts if isinstance(stmt, FnDeclNode)
+        ]
+        counter = UseCounter(fn.name for fn in functions)
+        tree.accept(counter)
+        dead = {
+            fn.name for fn in functions
+            if counter.function_calls.get(fn.name, 0) == 0
+        }
+        if not dead:
+            return tree
+        kept_stmts = [
+            stmt for stmt in tree.stmts
+            if not isinstance(stmt, FnDeclNode) or stmt.name not in dead
+        ]
+        if len(kept_stmts) == len(tree.stmts):
+            return tree
+        tree.stmts = kept_stmts
 
 
 class CodeGenVisitor:
@@ -2961,6 +2991,7 @@ ast.accept(checker)
 
 if args.remove_unused:
     ast = remove_unused_variables(ast)
+    ast = remove_unused_functions(ast)
 
 if args.ast_checked:
     ast.dump()

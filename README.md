@@ -78,7 +78,7 @@ python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-check
 - `--tokens` (Optional): Prints the token stream to `stdout` and continues compilation.
 - `--ast` (Optional): Prints the Abstract Syntax Tree (AST) to `stdout` and **exits immediately with code 0** (no semantic checking, no code generation, and no `.ll` file is written).
 - `--ast-checked` (Optional): Performs semantic checking, prints the checked AST (including generated lambda closure structs), and exits without code generation.
-- `--remove-unused` (Optional): After successful semantic checking, removes unused variable declarations and their assignments before AST output or code generation. Without this flag, compilation is unchanged.
+- `--remove-unused` (Optional): After successful semantic checking, removes unused variable declarations and their assignments, as well as uncalled global functions, before AST output or code generation. Global function calls are counted across top-level statements, global functions, member functions, and lambda bodies. Removing an unused function can make another function unused, so this repeats until stable. Member functions and lambdas are never removed. Without this flag, compilation is unchanged.
 
 The unused-variable pass counts reads by resolved declaration, not by variable name, and repeats after removals until no further declarations become unused. It keeps declarations and assignments whose initializer or assigned value contains a function call or `read()`, since these may have observable effects. A variable that only feeds itself (for example, `k := k + 1`) remains because the right-hand side reads it; this is a limit of read counting, not a proof that the variable affects program output.
 
