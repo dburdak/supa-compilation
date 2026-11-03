@@ -1,0 +1,8 @@
+contains||FnDecl twice(i32 a) -> i32
+absent||FnDecl helper(i32 a) -> i32
+absent||FnDecl unused() -> i32
+contains||FnDecl method_target() -> i32
+contains||FnDecl lambda_target() -> i32
+absent||FnDecl never_called() -> i32
+contains||MemberFn invoke -> i32
+contains||Lambda callback

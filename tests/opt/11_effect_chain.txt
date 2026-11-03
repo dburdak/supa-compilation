@@ -1,0 +1,11 @@
+fn printer := () -> i32
+{
+print("relay")
+exit 0
+}
+fn relay := () -> i32
+{
+exit printer()
+}
+i32 discarded{relay()}
+exit 0

@@ -1,0 +1,22 @@
+Program
+  FnDecl loops() -> i32
+    Block
+      While
+        Bool false
+        Block
+      Exit
+        Const 1
+  FnDecl first() -> i32
+    Block
+      Decl loop_result i32 const
+        FnCall loops
+      Decl recursive_result i32 const
+        FnCall second
+      Exit
+        FnCall second
+  FnDecl second() -> i32
+    Block
+      Exit
+        FnCall first
+  Exit
+    Const 0

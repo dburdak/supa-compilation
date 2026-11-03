@@ -119,6 +119,24 @@ run_valid_test() {
         fi
     fi
 
+    rm -f "$TMP_LL"
+    stderr_output=$("$PYTHON" "$COMPILER" --remove-unused "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: optimized compiler exited with code $exit_code"
+        echo "       stderr: $stderr_output"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    actual_out=$(execute_ir "$TMP_LL" "$input_file")
+    if [ "$actual_out" != "$expected_out" ]; then
+        echo -e "${RED}FAIL${NC} $name: optimized runtime output mismatch"
+        echo "       expected: '$expected_out'"
+        echo "       actual:   '$actual_out'"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
     echo -e "${GREEN}PASS${NC} $name"
     PASS=$((PASS + 1))
 }
@@ -177,7 +195,101 @@ run_invalid_test() {
             return
         fi
     fi
+
+    actual_err=$("$PYTHON" "$COMPILER" --remove-unused "$txt" "$TMP_LL" 2>&1)
+    exit_code=$?
+    if [ "$exit_code" -eq 0 ] || [ "$actual_err" != "$expected_err" ] || [ -f "$TMP_LL" ]; then
+        echo -e "${RED}FAIL${NC} $name: --remove-unused changed invalid-program handling"
+        FAIL=$((FAIL + 1))
+        return
+    fi
     
+    echo -e "${GREEN}PASS${NC} $name"
+    PASS=$((PASS + 1))
+}
+
+run_opt_test() {
+    local txt="$1"
+    local expected_out_file="${txt%.txt}.expected"
+    local expected_ast_file="${txt%.txt}.astc"
+    local checks_file="${txt%.txt}.checks"
+    local name="opt/$(basename "$txt")"
+    local baseline_out optimized_out checked_ast expected_out
+
+    rm -f "$TMP_LL"
+    local stderr_output exit_code
+    stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: baseline compiler exited with code $exit_code"
+        echo "       stderr: $stderr_output"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    baseline_out=$(execute_ir "$TMP_LL" "${txt%.txt}.in")
+
+    rm -f "$TMP_LL"
+    case "$(basename "$txt")" in
+        01_*)
+            stderr_output=$("$PYTHON" "$COMPILER" --remove-unused "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+            ;;
+        02_*)
+            stderr_output=$("$PYTHON" "$COMPILER" "$txt" --remove-unused "$TMP_LL" 2>&1 1>/dev/null)
+            ;;
+        03_*)
+            stderr_output=$("$PYTHON" "$COMPILER" "$txt" "$TMP_LL" --remove-unused 2>&1 1>/dev/null)
+            ;;
+        *)
+            stderr_output=$("$PYTHON" "$COMPILER" --remove-unused "$txt" "$TMP_LL" 2>&1 1>/dev/null)
+            ;;
+    esac
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: optimized compiler exited with code $exit_code"
+        echo "       stderr: $stderr_output"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    optimized_out=$(execute_ir "$TMP_LL" "${txt%.txt}.in")
+    expected_out=$(cat "$expected_out_file")
+    if [ "$baseline_out" != "$expected_out" ] || [ "$optimized_out" != "$expected_out" ]; then
+        echo -e "${RED}FAIL${NC} $name: output mismatch"
+        echo "       expected: '$expected_out'"
+        echo "       baseline: '$baseline_out'"
+        echo "       optimized: '$optimized_out'"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    checked_ast=$("$PYTHON" "$COMPILER" --remove-unused --ast-checked "$txt" 2>&1)
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} $name: --ast-checked failed with code $exit_code"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    local expected_ast
+    expected_ast=$(cat "$expected_ast_file")
+    if [ "$checked_ast" != "$expected_ast" ]; then
+        echo -e "${RED}FAIL${NC} $name: --ast-checked mismatch"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    if [ -f "$checks_file" ]; then
+        while IFS='|' read -r mode expected text; do
+            [ -n "$mode" ] || continue
+            local count
+            count=$(printf '%s\n' "$checked_ast" | grep -F -c -- "$text" || true)
+            if { [ "$mode" = "contains" ] && [ "$count" -lt 1 ]; } ||
+               { [ "$mode" = "absent" ] && [ "$count" -ne 0 ]; } ||
+               { [ "$mode" = "count" ] && [ "$count" -ne "$expected" ]; }; then
+                echo -e "${RED}FAIL${NC} $name: AST check '$mode|$expected|$text' failed"
+                FAIL=$((FAIL + 1))
+                return
+            fi
+        done < "$checks_file"
+    fi
+
     echo -e "${GREEN}PASS${NC} $name"
     PASS=$((PASS + 1))
 }
@@ -224,6 +336,16 @@ for f in "$TESTS_DIR"/err/*.txt; do
         run_invalid_test "$f" "${f%.txt}.expected"
     else
         echo -e "${YELLOW}SKIP${NC} $(basename "$f"): no .expected file found"
+    fi
+done
+
+for f in "$TESTS_DIR"/opt/*.txt; do
+    [ -e "$f" ] || continue
+    if [ -f "${f%.txt}.expected" ] && [ -f "${f%.txt}.astc" ]; then
+        run_opt_test "$f"
+    else
+        echo -e "${RED}FAIL${NC} $(basename "$f"): missing .expected or .astc file"
+        FAIL=$((FAIL + 1))
     fi
 done
 

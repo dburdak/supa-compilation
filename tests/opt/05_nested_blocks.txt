@@ -1,0 +1,21 @@
+struct Holder
+{
+i32 mut value
+fn set := () -> i32
+{
+i32 method_dead{17}
+value := 9
+exit 0
+}
+}
+Holder mut holder{8}
+i32 update_result{holder.set()}
+if true
+{
+i32 if_dead{1}
+}
+while false
+{
+i32 while_dead{2}
+}
+exit holder.value

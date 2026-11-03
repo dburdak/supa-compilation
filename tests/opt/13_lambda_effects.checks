@@ -1,0 +1,4 @@
+contains||Decl effect_result i32 const
+absent||Decl pure_result i32 const
+contains||Lambda noisy
+contains||Lambda quiet

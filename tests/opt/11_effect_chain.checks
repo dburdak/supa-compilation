@@ -1,0 +1,3 @@
+contains||Decl discarded i32 const
+contains||FnDecl relay() -> i32
+contains||FnDecl printer() -> i32
