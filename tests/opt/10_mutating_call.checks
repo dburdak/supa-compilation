@@ -1,0 +1,2 @@
+contains||Decl ignored_bump i32 const
+absent||Decl ignored_peek i32 const

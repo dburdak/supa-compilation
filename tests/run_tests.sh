@@ -211,6 +211,7 @@ run_invalid_test() {
 run_opt_test() {
     local txt="$1"
     local expected_out_file="${txt%.txt}.expected"
+    local expected_ast_file="${txt%.txt}.astc"
     local checks_file="${txt%.txt}.checks"
     local name="opt/$(basename "$txt")"
     local baseline_out optimized_out checked_ast expected_out
@@ -267,18 +268,27 @@ run_opt_test() {
         FAIL=$((FAIL + 1))
         return
     fi
-    while IFS='|' read -r mode expected text; do
-        [ -n "$mode" ] || continue
-        local count
-        count=$(printf '%s\n' "$checked_ast" | grep -F -c -- "$text" || true)
-        if { [ "$mode" = "contains" ] && [ "$count" -lt 1 ]; } ||
-           { [ "$mode" = "absent" ] && [ "$count" -ne 0 ]; } ||
-           { [ "$mode" = "count" ] && [ "$count" -ne "$expected" ]; }; then
-            echo -e "${RED}FAIL${NC} $name: AST check '$mode|$expected|$text' failed"
-            FAIL=$((FAIL + 1))
-            return
-        fi
-    done < "$checks_file"
+    local expected_ast
+    expected_ast=$(cat "$expected_ast_file")
+    if [ "$checked_ast" != "$expected_ast" ]; then
+        echo -e "${RED}FAIL${NC} $name: --ast-checked mismatch"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+    if [ -f "$checks_file" ]; then
+        while IFS='|' read -r mode expected text; do
+            [ -n "$mode" ] || continue
+            local count
+            count=$(printf '%s\n' "$checked_ast" | grep -F -c -- "$text" || true)
+            if { [ "$mode" = "contains" ] && [ "$count" -lt 1 ]; } ||
+               { [ "$mode" = "absent" ] && [ "$count" -ne 0 ]; } ||
+               { [ "$mode" = "count" ] && [ "$count" -ne "$expected" ]; }; then
+                echo -e "${RED}FAIL${NC} $name: AST check '$mode|$expected|$text' failed"
+                FAIL=$((FAIL + 1))
+                return
+            fi
+        done < "$checks_file"
+    fi
 
     echo -e "${GREEN}PASS${NC} $name"
     PASS=$((PASS + 1))
@@ -331,10 +341,11 @@ done
 
 for f in "$TESTS_DIR"/opt/*.txt; do
     [ -e "$f" ] || continue
-    if [ -f "${f%.txt}.expected" ] && [ -f "${f%.txt}.checks" ]; then
+    if [ -f "${f%.txt}.expected" ] && [ -f "${f%.txt}.astc" ]; then
         run_opt_test "$f"
     else
-        echo -e "${YELLOW}SKIP${NC} $(basename "$f"): missing .expected or .checks file"
+        echo -e "${RED}FAIL${NC} $(basename "$f"): missing .expected or .astc file"
+        FAIL=$((FAIL + 1))
     fi
 done
 
