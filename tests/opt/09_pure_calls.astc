@@ -1,0 +1,12 @@
+Program
+  FnDecl loud(i32 a) -> i32
+    Block
+      Print
+        Var a
+      Exit
+        Var a
+  Decl c i32 const
+    FnCall loud
+      Const 5
+  Exit
+    Const 0

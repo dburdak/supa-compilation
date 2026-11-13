@@ -1,0 +1,12 @@
+fn noisy := []() -> i32
+{
+print("lambda")
+exit 1
+}
+fn quiet := []() -> i32
+{
+exit 2
+}
+i32 effect_result{noisy()}
+i32 pure_result{quiet()}
+exit 0

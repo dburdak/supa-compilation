@@ -1,0 +1,4 @@
+contains||Decl unused i32 const
+contains||Decl unused_read i32 const
+contains||Assign target
+contains||Assign read_target

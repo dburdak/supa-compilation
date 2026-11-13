@@ -1,0 +1,6 @@
+fn identity := (i32 value) -> i32
+{
+exit value
+}
+i32 answer{identity(5)}
+exit answer

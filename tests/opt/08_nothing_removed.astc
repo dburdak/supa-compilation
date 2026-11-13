@@ -1,0 +1,10 @@
+Program
+  FnDecl identity(i32 value) -> i32
+    Block
+      Exit
+        Var value
+  Decl answer i32 const
+    FnCall identity
+      Const 5
+  Exit
+    Var answer

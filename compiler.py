@@ -10,8 +10,10 @@ parser.add_argument("--tokens", action="store_true", help="print the token strea
 parser.add_argument("--ast", action="store_true", help="print the AST tree and exit")
 parser.add_argument("--ast-checked", action="store_true",
                     help="print the AST after semantic checking and exit")
+parser.add_argument("--remove-unused", action="store_true",
+                    help="remove unused variables, functions, and effect-free calls after semantic checking")
 
-args = parser.parse_args()
+args = parser.parse_intermixed_args()
 
 I32, I8, I64 = ir.IntType(32), ir.IntType(8), ir.IntType(64)
 I1 = ir.IntType(1)
@@ -2208,6 +2210,351 @@ class SemanticChecker:
         return node.type
 
 
+class FunctionEffects:
+    def __init__(self, global_functions, effectful_functions):
+        self.global_functions = global_functions
+        self.effectful_functions = effectful_functions
+
+
+class FunctionEffectAnalyzer:
+    def __init__(self, tree, generated_lambdas):
+        self.global_functions = {}
+        self.functions = []
+        for stmt in tree.stmts:
+            if isinstance(stmt, FnDeclNode):
+                self.global_functions[stmt.name] = stmt
+                self.functions.append(stmt)
+            elif isinstance(stmt, StructDefNode):
+                self.functions.extend(stmt.methods)
+        for struct_node in generated_lambdas:
+            self.functions.extend(struct_node.methods)
+
+    def analyze(self):
+        calls = {function: set() for function in self.functions}
+        effectful = {
+            function for function in self.functions
+            if getattr(function, "is_mutating", False)
+        }
+
+        for function in self.functions:
+            self._scan(function.body, function, calls, effectful)
+
+        for function in self.functions:
+            pending = list(calls[function])
+            seen = set()
+            while pending:
+                callee = pending.pop()
+                if callee is function:
+                    effectful.add(function)
+                    break
+                if callee not in seen:
+                    seen.add(callee)
+                    pending.extend(calls[callee])
+
+        changed = True
+        while changed:
+            changed = False
+            for function in self.functions:
+                if function not in effectful and calls[function] & effectful:
+                    effectful.add(function)
+                    changed = True
+
+        return FunctionEffects(self.global_functions, effectful)
+
+    def _scan(self, node, caller, calls, effectful):
+        if node is None:
+            return
+        if isinstance(node, BlockNode):
+            for stmt in node.stmts:
+                self._scan(stmt, caller, calls, effectful)
+            self._scan(node.exit_node, caller, calls, effectful)
+        elif isinstance(node, (DeclNode,)):
+            for expr in node.inits:
+                self._scan(expr, caller, calls, effectful)
+        elif isinstance(node, AssignNode):
+            self._scan(node.value, caller, calls, effectful)
+        elif isinstance(node, IfNode):
+            self._scan(node.cond, caller, calls, effectful)
+            self._scan(node.then_block, caller, calls, effectful)
+            self._scan(node.else_block, caller, calls, effectful)
+        elif isinstance(node, WhileNode):
+            effectful.add(caller)
+            self._scan(node.cond, caller, calls, effectful)
+            self._scan(node.body, caller, calls, effectful)
+        elif isinstance(node, PrintNode):
+            effectful.add(caller)
+            self._scan(node.arg, caller, calls, effectful)
+        elif isinstance(node, ExitNode):
+            self._scan(node.val, caller, calls, effectful)
+        elif isinstance(node, FnCallNode):
+            if node.rewritten_call is not None:
+                self._scan(node.rewritten_call, caller, calls, effectful)
+            else:
+                target = getattr(node, "self_method", None)
+                if target is None and node.name == "read":
+                    effectful.add(caller)
+                elif target is None:
+                    target = self.global_functions.get(node.name)
+                if target in calls:
+                    calls[caller].add(target)
+                for arg in node.args:
+                    self._scan(arg, caller, calls, effectful)
+        elif isinstance(node, MemberCallNode):
+            target = node.mfn
+            if target in calls:
+                calls[caller].add(target)
+            self._scan(node.target_node, caller, calls, effectful)
+            for arg in node.args:
+                self._scan(arg, caller, calls, effectful)
+        elif isinstance(node, FieldAccessNode):
+            self._scan(node.obj, caller, calls, effectful)
+        elif isinstance(node, StructInitNode):
+            for expr in node.inits:
+                self._scan(expr, caller, calls, effectful)
+        elif isinstance(node, BinOpNode):
+            self._scan(node.left, caller, calls, effectful)
+            self._scan(node.right, caller, calls, effectful)
+        elif isinstance(node, NotNode):
+            self._scan(node.operand, caller, calls, effectful)
+
+
+def has_call_or_read(node, effects=None):
+    if node is None:
+        return False
+    if isinstance(node, FnCallNode):
+        if effects is None:
+            return True
+        if node.rewritten_call is not None:
+            return has_call_or_read(node.rewritten_call, effects) or any(
+                has_call_or_read(arg, effects) for arg in node.args
+            )
+        if node.name == "read" and getattr(node, "self_method", None) is None:
+            return True
+        target = getattr(node, "self_method", None)
+        if target is None:
+            target = effects.global_functions.get(node.name)
+        return (
+            target in effects.effectful_functions
+            or any(has_call_or_read(arg, effects) for arg in node.args)
+        )
+    if isinstance(node, MemberCallNode):
+        if effects is None:
+            return True
+        return (
+            node.mfn in effects.effectful_functions
+            or has_call_or_read(node.target_node, effects)
+            or any(has_call_or_read(arg, effects) for arg in node.args)
+        )
+    if isinstance(node, BinOpNode):
+        return has_call_or_read(node.left, effects) or has_call_or_read(node.right, effects)
+    if isinstance(node, NotNode):
+        return has_call_or_read(node.operand, effects)
+    if isinstance(node, FieldAccessNode):
+        return has_call_or_read(node.obj, effects)
+    if isinstance(node, StructInitNode):
+        return any(has_call_or_read(expr, effects) for expr in node.inits)
+    return False
+
+
+class UseCounter:
+    def __init__(self, global_functions=None, call_effects=None):
+        self.reads = {}
+        self.declarations = set()
+        self.global_functions = set(global_functions or ())
+        self.function_calls = {}
+        self.call_effects = call_effects
+        self.lambdas = set()
+
+    def read(self, decl):
+        if decl is not None:
+            key = id(decl)
+            self.reads[key] = self.reads.get(key, 0) + 1
+
+    def visit_program(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit is not None:
+            node.exit.accept(self)
+
+    def visit_struct_def(self, node):
+        for method in node.methods:
+            method.body.accept(self)
+
+    def visit_fn_decl(self, node):
+        node.body.accept(self)
+
+    def visit_lambda(self, node):
+        if node.generated_struct is not None:
+            self.lambdas.add(node.generated_struct)
+        for capture in node.capture_values:
+            capture.accept(self)
+        node.body.accept(self)
+
+    def visit_block(self, node):
+        for stmt in node.stmts:
+            stmt.accept(self)
+        if node.exit_node is not None:
+            node.exit_node.accept(self)
+
+    def visit_decl(self, node):
+        self.declarations.add(id(node))
+        self.reads.setdefault(id(node), 0)
+        if any(has_call_or_read(expr, self.call_effects) for expr in node.inits):
+            self.read(node)
+        for expr in node.inits:
+            expr.accept(self)
+
+    def visit_assign(self, node):
+        if has_call_or_read(node.value, self.call_effects):
+            self.read(node.decl)
+        node.value.accept(self)
+
+    def visit_if(self, node):
+        node.cond.accept(self)
+        node.then_block.accept(self)
+        if node.else_block is not None:
+            node.else_block.accept(self)
+
+    def visit_while(self, node):
+        node.cond.accept(self)
+        node.body.accept(self)
+
+    def visit_print(self, node):
+        node.arg.accept(self)
+
+    def visit_exit(self, node):
+        if node.val is not None:
+            node.val.accept(self)
+
+    def visit_var(self, node):
+        self.read(getattr(node, "decl", None))
+
+    def visit_field_access(self, node):
+        node.obj.accept(self)
+
+    def visit_member_call(self, node):
+        node.target_node.accept(self)
+        for arg in node.args:
+            arg.accept(self)
+
+    def visit_fn_call(self, node):
+        if (
+            node.rewritten_call is None
+            and getattr(node, "self_method", None) is None
+            and node.name in self.global_functions
+        ):
+            self.function_calls[node.name] = self.function_calls.get(node.name, 0) + 1
+        if node.rewritten_call is not None:
+            node.rewritten_call.accept(self)
+        else:
+            for arg in node.args:
+                arg.accept(self)
+
+    def visit_struct_init(self, node):
+        for expr in node.inits:
+            expr.accept(self)
+
+    def visit_binop(self, node):
+        node.left.accept(self)
+        node.right.accept(self)
+
+    def visit_not(self, node):
+        node.operand.accept(self)
+
+    def visit_const(self, node):
+        pass
+
+    def visit_bool(self, node):
+        pass
+
+    def visit_string_lit(self, node):
+        pass
+
+
+class UnusedVariablePruner:
+    def __init__(self, dead, call_effects=None):
+        self.dead = dead
+        self.call_effects = call_effects
+        self.removed = False
+
+    def prune(self, program):
+        program.stmts = self.prune_stmts(program.stmts)
+        for stmt in program.stmts:
+            self.prune_nested(stmt)
+        return self.removed
+
+    def prune_stmts(self, stmts):
+        kept = []
+        for stmt in stmts:
+            if isinstance(stmt, DeclNode) and id(stmt) in self.dead:
+                self.removed = True
+                continue
+            if (isinstance(stmt, AssignNode)
+                    and id(getattr(stmt, "decl", None)) in self.dead):
+                self.removed = True
+                continue
+            if (isinstance(stmt, (FnCallNode, MemberCallNode))
+                    and not has_call_or_read(stmt, self.call_effects)):
+                self.removed = True
+                continue
+            kept.append(stmt)
+        return kept
+
+    def prune_block(self, block):
+        block.stmts = self.prune_stmts(block.stmts)
+        for stmt in block.stmts:
+            self.prune_nested(stmt)
+
+    def prune_nested(self, stmt):
+        if isinstance(stmt, (FnDeclNode, MemberFnDeclNode)):
+            self.prune_block(stmt.body)
+        elif isinstance(stmt, StructDefNode):
+            for method in stmt.methods:
+                self.prune_block(method.body)
+        elif isinstance(stmt, LambdaNode):
+            self.prune_block(stmt.body)
+        elif isinstance(stmt, IfNode):
+            self.prune_block(stmt.then_block)
+            if stmt.else_block is not None:
+                self.prune_block(stmt.else_block)
+        elif isinstance(stmt, WhileNode):
+            self.prune_block(stmt.body)
+
+
+def remove_unused_variables(tree, call_effects=None):
+    while True:
+        counter = UseCounter(call_effects=call_effects)
+        tree.accept(counter)
+        dead = {
+            decl_id for decl_id in counter.declarations
+            if counter.reads.get(decl_id, 0) == 0
+        }
+        if not UnusedVariablePruner(dead, call_effects).prune(tree):
+            return tree
+
+
+def remove_unused_functions(tree):
+    while True:
+        functions = [
+            stmt for stmt in tree.stmts if isinstance(stmt, FnDeclNode)
+        ]
+        counter = UseCounter(fn.name for fn in functions)
+        tree.accept(counter)
+        dead = {
+            fn.name for fn in functions
+            if counter.function_calls.get(fn.name, 0) == 0
+        }
+        if not dead:
+            return tree
+        kept_stmts = [
+            stmt for stmt in tree.stmts
+            if not isinstance(stmt, FnDeclNode) or stmt.name not in dead
+        ]
+        if len(kept_stmts) == len(tree.stmts):
+            return tree
+        tree.stmts = kept_stmts
+
+
 class CodeGenVisitor:
     def __init__(self, builder, printf_func, fmt_global, generated_lambdas=None):
         self.builder = builder
@@ -2779,11 +3126,27 @@ if args.ast:
 checker = SemanticChecker()
 ast.accept(checker)
 
+if args.remove_unused:
+    call_effects = FunctionEffectAnalyzer(
+        ast, checker.generated_lambdas
+    ).analyze()
+    ast = remove_unused_variables(ast, call_effects)
+    ast = remove_unused_functions(ast)
+    live_lambdas = UseCounter()
+    ast.accept(live_lambdas)
+    generated_lambdas = [
+        struct_node for struct_node in checker.generated_lambdas
+        if struct_node in live_lambdas.lambdas
+    ]
+else:
+    generated_lambdas = checker.generated_lambdas
+
 if args.ast_checked:
     ast.dump()
     sys.exit(0)
 
-codegen = CodeGenVisitor(builder, printf, fmt, checker.generated_lambdas)
+codegen = CodeGenVisitor(builder, printf, fmt, generated_lambdas)
+del checker
 ast.accept(codegen)
 
 if args.output_path:

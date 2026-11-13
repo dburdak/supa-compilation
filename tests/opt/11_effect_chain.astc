@@ -1,0 +1,15 @@
+Program
+  FnDecl printer() -> i32
+    Block
+      Print
+        StringLit "relay"
+      Exit
+        Const 0
+  FnDecl relay() -> i32
+    Block
+      Exit
+        FnCall printer
+  Decl discarded i32 const
+    FnCall relay
+  Exit
+    Const 0

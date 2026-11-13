@@ -1,0 +1,5 @@
+contains||Decl loop_result i32 const
+contains||Decl recursive_result i32 const
+contains||FnDecl first() -> i32
+contains||FnDecl second() -> i32
+contains||FnDecl loops() -> i32

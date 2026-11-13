@@ -1,0 +1,21 @@
+Program
+  FnDecl effect() -> i32
+    Block
+      Print
+        StringLit "effect"
+      Exit
+        Const 7
+  Decl unused i32 const
+    FnCall effect
+  Decl unused_read i32 const
+    FnCall read
+  Decl target i32 mut
+    Const 0
+  Assign target
+    FnCall effect
+  Decl read_target i32 mut
+    Const 0
+  Assign read_target
+    FnCall read
+  Exit
+    Const 0

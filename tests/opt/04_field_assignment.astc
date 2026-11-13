@@ -1,0 +1,5 @@
+Program
+  Struct Box
+    Member value i32 mut
+  Exit
+    Const 3

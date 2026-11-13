@@ -55,21 +55,22 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
 ├── compiler.py               # The main compiler (Lexer -> Parser -> SemanticChecker -> CodeGenVisitor)
 ├── grammar.ebnf              # EBNF grammar reference
 ├── ai_usage.txt              # AI interaction log
-└── tests/                    # Test suite containing 4 main sets of tests
+└── tests/                    # Test suite containing compiler and optimization tests
     ├── run_tests.sh          # Bash script to run all autotests
     ├── run_ll.py             # llvmlite JIT fallback execution script
     ├── valid_*.txt           # Valid programs (compiled and executed)
     ├── invalid_*.txt         # Invalid programs (should produce stderr, no .ll)
     ├── ok/                   # Valid programs (widening, control flow, functions, structs)
     │   └── *.txt             # Valid programs testing all language features
-    └── err/                  # Invalid programs (syntax, semantic, type errors)
-        └── *.txt             # Invalid programs testing all error cases
+    ├── err/                  # Invalid programs (syntax, semantic, type errors)
+    │   └── *.txt             # Invalid programs testing all error cases
+    └── opt/                  # Programs testing --remove-unused and output preservation
 ```
 
 ## Usage
 
 ```bash
-python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-checked]
+python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-checked] [--remove-unused]
 ```
 
 - `source_path` (Required): Path to the `.txt` source file.
@@ -77,6 +78,16 @@ python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-check
 - `--tokens` (Optional): Prints the token stream to `stdout` and continues compilation.
 - `--ast` (Optional): Prints the Abstract Syntax Tree (AST) to `stdout` and **exits immediately with code 0** (no semantic checking, no code generation, and no `.ll` file is written).
 - `--ast-checked` (Optional): Performs semantic checking, prints the checked AST (including generated lambda closure structs), and exits without code generation.
+- `--remove-unused` (Optional): After successful semantic checking, removes unused variable declarations and their assignments, uncalled global functions, and calls with no observable effects, before AST output or code generation. Global function calls are counted across top-level statements, global functions, member functions, and lambda bodies. Removing an unused function can make another function unused, so this repeats until stable. Member functions and lambdas are never removed. Without this flag, compilation is unchanged.
+- Options may appear before, between, or after the source and output paths.
+
+The test runner checks `tests/ok` and `tests/err` both with and without `--remove-unused` by default. Set `OPT=0` to run those directories without the optimization, `OPT=1` to run them with it, or leave `OPT` unset (or set it to `both`) to run both modes. The optimization-specific `tests/opt` cases always compare optimized and unoptimized behavior.
+
+## Optimizations
+
+The unused-variable pass counts reads by resolved declaration, not by variable name, and repeats after removals until no further declarations become unused. It keeps declarations and assignments whose initializer or assigned value contains `read()` or a call known to have an observable effect. Calls without effects do not keep an otherwise unused declaration alive, and pure standalone call statements are removed too. Function effects are computed to a fixed point: `print`, `read`, mutating member functions, loops, and recursive call cycles seed the set; callers of effectful functions are then added. A variable that only feeds itself (for example, `k := k + 1`) remains because the right-hand side reads it; this is a limit of read counting, not a proof that the variable affects program output.
+
+The compiler is written in Python and runs on CPython. AST nodes have no parent pointers, so unlinking a node removes the AST's references to its subtree. The semantic checker's symbol tables can temporarily retain declarations after pruning; code generation does not need those tables, so the checker is released before code generation. Once no references remain, CPython's reference counting releases the detached objects immediately; `gc.collect()` is not needed for this acyclic node. A parent pointer would introduce a back-reference and could keep a detached subtree alive through a reference cycle until cyclic collection. Reproduce the measurement with `python3 tests/test_ast_reclamation.py`: its `weakref.ref` remains live while the checker retains the removed declaration and becomes `None` immediately after `del checker`, without calling `gc.collect()`.
 
 ### `--ast` Dump Format
 The AST dump uses indentation to represent the tree structure (each level adds 2 spaces):
@@ -107,4 +118,4 @@ Run tests via `tests/run_tests.sh`:
 ./tests/run_tests.sh
 ```
 
-Runtime output is compared exactly, including the final `Program exit with result ...` line.
+Runtime output is compared exactly, including the final `Program exit with result ...` line. Every `tests/opt/*.txt` case has a `.expected` runtime output and an `.astc` exact snapshot of its optimized, semantically checked AST.

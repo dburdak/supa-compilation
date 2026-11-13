@@ -1,0 +1,22 @@
+Program
+  Lambda bump -> i32
+    Struct lambda.bump
+      MemberFn call -> i32
+        Param x i32
+        Block
+          Decl self i32 mut
+            Const 0
+          Assign self
+            BinOp +
+              Var self
+              Const 1
+          Decl result i32 const
+            Var x
+          Exit
+            Var result
+    Decl bump lambda.bump const
+  Decl answer i32 const
+    CallableCall bump
+      Const 4
+  Exit
+    Var answer

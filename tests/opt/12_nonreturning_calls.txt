@@ -1,0 +1,19 @@
+fn loops := () -> i32
+{
+while false
+{
+i32 local{1}
+}
+exit 1
+}
+fn first := () -> i32
+{
+i32 loop_result{loops()}
+i32 recursive_result{second()}
+exit second()
+}
+fn second := () -> i32
+{
+exit first()
+}
+exit 0

@@ -1,0 +1,21 @@
+Program
+  Lambda noisy -> i32
+    Struct lambda.noisy
+      MemberFn call -> i32
+        Block
+          Print
+            StringLit "lambda"
+          Exit
+            Const 1
+    Decl noisy lambda.noisy const
+  Lambda quiet -> i32
+    Struct lambda.quiet
+      MemberFn call -> i32
+        Block
+          Exit
+            Const 2
+    Decl quiet lambda.quiet const
+  Decl effect_result i32 const
+    CallableCall noisy
+  Exit
+    Const 0

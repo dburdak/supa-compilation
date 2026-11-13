@@ -1,0 +1,6 @@
+absent||Decl a i32 const
+absent||Decl b i32 const
+absent||FnDecl quiet(i32 a) -> i32
+absent||FnDecl square(i32 a) -> i32
+contains||Decl c i32 const
+contains||FnDecl loud(i32 a) -> i32

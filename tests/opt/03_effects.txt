@@ -1,0 +1,12 @@
+fn effect := () -> i32
+{
+print("effect")
+exit 7
+}
+i32 unused{effect()}
+i32 unused_read{read()}
+i32 mut target{0}
+target := effect()
+i32 mut read_target{0}
+read_target := read()
+exit 0

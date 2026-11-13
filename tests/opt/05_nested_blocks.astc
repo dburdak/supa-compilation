@@ -1,0 +1,23 @@
+Program
+  Struct Holder
+    Member value i32 mut
+    MemberFn set -> i32
+      Block
+        Assign value
+          Const 9
+        Exit
+          Const 0
+  Decl holder Holder mut
+    Const 8
+  Decl update_result i32 const
+    MemberCall set
+      Var holder
+  If
+    Bool true
+    Block
+  While
+    Bool false
+    Block
+  Exit
+    FieldAccess value
+      Var holder

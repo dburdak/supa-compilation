@@ -1,0 +1,13 @@
+fn helper := () -> i32
+{
+exit 7
+}
+fn unused := () -> i32
+{
+fn callback := []() -> i32
+{
+exit helper()
+}
+exit callback()
+}
+exit 0

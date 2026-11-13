@@ -1,0 +1,4 @@
+absent||Decl dead i32 const
+contains||Decl self i32 mut
+contains||Assign self
+contains||Param x i32
