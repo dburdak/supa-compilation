@@ -56,6 +56,11 @@ link the geometry example with `clang`. The `tests/ok` libc test also checks
 `abs` and `llabs` through the LLVM runner. Native FFI tests require `llc` and
 `clang`.
 
+For an interactive native build of the Points program, run
+`./full_compiler.sh` (or `./full_compiler.sh --remove-unused`). It builds
+`points.ll`, `points.o`, and `points`, then starts the executable; input can
+also be redirected from a session file.
+
 ## Requirements
 
 - Python 3.x
