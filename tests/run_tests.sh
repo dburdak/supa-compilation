@@ -374,6 +374,14 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+if "$SCRIPT_DIR/run_ffi_tests.sh" "$COMPILER"; then
+    echo -e "${GREEN}PASS${NC} tests/ffi (native C linking)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC} tests/ffi (native C linking)"
+    FAIL=$((FAIL + 1))
+fi
+
 echo "----------------------------------------"
 echo -e "Passed: ${GREEN}${PASS}${NC}   Failed: ${RED}${FAIL}${NC}"
 

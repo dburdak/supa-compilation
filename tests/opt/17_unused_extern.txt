@@ -1,0 +1,2 @@
+extern fn unused := (i32 v) -> i32
+exit 0

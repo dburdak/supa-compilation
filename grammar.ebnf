@@ -1,4 +1,6 @@
-program ::= { struct_def } { fn_decl } { statement } finish
+program ::= { struct_def } { function_decl } { statement } finish
+
+function_decl ::= fn_decl | extern_fn_decl
 
 primitive_type ::= "i32" | "i64" | "bool"
 
@@ -11,6 +13,8 @@ struct_def ::= "struct" ident NL "{" NL field_decl { field_decl } { fn_decl } "}
 field_decl ::= type [ "mut" ] ident NL
 
 fn_decl ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block
+
+extern_fn_decl ::= "extern" "fn" ident ":=" "(" [ param_list ] ")" "->" type NL
 
 param_list ::= param { "," param }
 

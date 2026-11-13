@@ -41,12 +41,27 @@ constant inside the lambda unless declared `mut`; a mutable capture makes the cl
 Closure calls use the same callable-object semantics as structs with a `call` member function. Use
 `--ast-checked` to inspect the AST after semantic lowering.
 
+## Calling C
+
+Top-level `extern fn name := (parameters) -> result` declarations can call C
+functions by their declared symbol name. They must appear after structures and
+among function declarations, have no body, and may use only `i32`/`i64`
+parameters and results; these map to C `int`/`long long`. The compiler emits an
+LLVM declaration, while the linker resolves its implementation from libc or a
+C source/object file. Extern calls are treated as effectful for
+`--remove-unused`, since a C function may have observable side effects.
+
+Run `tests/run_ffi_tests.sh` (or the full `tests/run_tests.sh`) to compile and
+link the geometry example with `clang`. The `tests/ok` libc test also checks
+`abs` and `llabs` through the LLVM runner. Native FFI tests require `llc` and
+`clang`.
+
 ## Requirements
 
 - Python 3.x
 - `llvmlite`
 
-Note: The compiler and existing `tests/ok`, `tests/err`, and `tests/opt` checks do not require native LLVM command-line tools. They use `lli` if available on your `PATH`, or fall back to `tests/run_ll.py` and the `llvmlite` JIT. The end-to-end `tests/io` checks additionally require `llc` and `clang` to build native binaries.
+Note: The compiler and existing `tests/ok`, `tests/err`, and `tests/opt` checks do not require native LLVM command-line tools. They use `lli` if available on your `PATH`, or fall back to `tests/run_ll.py` and the `llvmlite` JIT. The end-to-end `tests/io` and `tests/ffi` checks additionally require `llc` and `clang` to build native binaries.
 
 ## Project Structure
 
@@ -58,6 +73,7 @@ Note: The compiler and existing `tests/ok`, `tests/err`, and `tests/opt` checks 
 └── tests/                    # Test suite containing compiler and optimization tests
     ├── run_tests.sh          # Bash script to run all autotests
     ├── run_io_tests.sh       # Build and run native I/O session tests
+    ├── run_ffi_tests.sh      # Build and run native C FFI tests
     ├── run_ll.py             # llvmlite JIT fallback execution script
     ├── valid_*.txt           # Valid programs (compiled and executed)
     ├── invalid_*.txt         # Invalid programs (should produce stderr, no .ll)
@@ -67,6 +83,7 @@ Note: The compiler and existing `tests/ok`, `tests/err`, and `tests/opt` checks 
     │   └── *.txt             # Invalid programs testing all error cases
     ├── io/                   # End-to-end tests compiled to native binaries
     │   └── NAME.S.in/.expected # Input/output pairs for terminal sessions
+    ├── ffi/                  # C interoperability programs, sources, and sessions
     └── opt/                  # Programs testing --remove-unused and output preservation
 ```
 

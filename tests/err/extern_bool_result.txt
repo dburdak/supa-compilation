@@ -1,0 +1,2 @@
+extern fn bad := () -> bool
+exit 0

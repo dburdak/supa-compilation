@@ -1,0 +1,3 @@
+extern fn announce := (i32 v) -> i32
+announce(7)
+exit 0
