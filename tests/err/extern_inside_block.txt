@@ -1,0 +1,6 @@
+fn wrapper := () -> i32
+{
+extern fn bad := (i32 v) -> i32
+exit 0
+}
+exit wrapper()

@@ -41,12 +41,32 @@ constant inside the lambda unless declared `mut`; a mutable capture makes the cl
 Closure calls use the same callable-object semantics as structs with a `call` member function. Use
 `--ast-checked` to inspect the AST after semantic lowering.
 
+## Calling C
+
+Top-level `extern fn name := (parameters) -> result` declarations can call C
+functions by their declared symbol name. They must appear after structures and
+among function declarations, have no body, and may use only `i32`/`i64`
+parameters and results; these map to C `int`/`long long`. The compiler emits an
+LLVM declaration, while the linker resolves its implementation from libc or a
+C source/object file. Extern calls are treated as effectful for
+`--remove-unused`, since a C function may have observable side effects.
+
+Run `tests/run_ffi_tests.sh` (or the full `tests/run_tests.sh`) to compile and
+link the geometry example with `clang`. The `tests/ok` libc test also checks
+`abs` and `llabs` through the LLVM runner. Native FFI tests require `llc` and
+`clang`.
+
+For an interactive native build of the Points program, run
+`./full_compiler.sh` (or `./full_compiler.sh --remove-unused`). It builds
+`points.ll`, `points.o`, and `points`, then starts the executable; input can
+also be redirected from a session file.
+
 ## Requirements
 
 - Python 3.x
 - `llvmlite`
 
-Note: Native LLVM command-line tools like `llc` or `clang` are **not** required for the autotests. The test runner uses `lli` if available on your `PATH`. If not, it falls back to `tests/run_ll.py` which uses the `llvmlite` JIT compiler to execute the generated IR directly.
+Note: The compiler and existing `tests/ok`, `tests/err`, and `tests/opt` checks do not require native LLVM command-line tools. They use `lli` if available on your `PATH`, or fall back to `tests/run_ll.py` and the `llvmlite` JIT. The end-to-end `tests/io` and `tests/ffi` checks additionally require `llc` and `clang` to build native binaries.
 
 ## Project Structure
 
@@ -57,6 +77,8 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
 ├── ai_usage.txt              # AI interaction log
 └── tests/                    # Test suite containing compiler and optimization tests
     ├── run_tests.sh          # Bash script to run all autotests
+    ├── run_io_tests.sh       # Build and run native I/O session tests
+    ├── run_ffi_tests.sh      # Build and run native C FFI tests
     ├── run_ll.py             # llvmlite JIT fallback execution script
     ├── valid_*.txt           # Valid programs (compiled and executed)
     ├── invalid_*.txt         # Invalid programs (should produce stderr, no .ll)
@@ -64,6 +86,9 @@ Note: Native LLVM command-line tools like `llc` or `clang` are **not** required 
     │   └── *.txt             # Valid programs testing all language features
     ├── err/                  # Invalid programs (syntax, semantic, type errors)
     │   └── *.txt             # Invalid programs testing all error cases
+    ├── io/                   # End-to-end tests compiled to native binaries
+    │   └── NAME.S.in/.expected # Input/output pairs for terminal sessions
+    ├── ffi/                  # C interoperability programs, sources, and sessions
     └── opt/                  # Programs testing --remove-unused and output preservation
 ```
 
@@ -82,6 +107,12 @@ python compiler.py <source_path> [<output_path>] [--tokens] [--ast | --ast-check
 - Options may appear before, between, or after the source and output paths.
 
 The test runner checks `tests/ok` and `tests/err` both with and without `--remove-unused` by default. Set `OPT=0` to run those directories without the optimization, `OPT=1` to run them with it, or leave `OPT` unset (or set it to `both`) to run both modes. The optimization-specific `tests/opt` cases always compare optimized and unoptimized behavior.
+
+The `tests/io` sessions are compiled from Supa source to LLVM IR, then to native
+objects with `llc -relocation-model=pic` and linked with `clang -fPIE`. They run
+in both compiler modes by default and compare stdout byte-for-byte with their
+`.expected` files. Set `OPT=0` or `OPT=1` to select a single mode. These tests
+require `llc` and `clang` on `PATH`.
 
 ## Optimizations
 
@@ -118,4 +149,4 @@ Run tests via `tests/run_tests.sh`:
 ./tests/run_tests.sh
 ```
 
-Runtime output is compared exactly, including the final `Program exit with result ...` line. Every `tests/opt/*.txt` case has a `.expected` runtime output and an `.astc` exact snapshot of its optimized, semantically checked AST.
+Runtime output is compared exactly, including the final `Program exit with result ...` line. Every `tests/opt/*.txt` case has a `.expected` runtime output and an `.astc` exact snapshot of its optimized, semantically checked AST. The `tests/io` suite additionally links native binaries and tests every matching `.in`/`.expected` session with and without `--remove-unused`.

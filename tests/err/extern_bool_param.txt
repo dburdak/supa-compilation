@@ -1,0 +1,2 @@
+extern fn bad := (bool c) -> i32
+exit 0

@@ -366,6 +366,22 @@ for f in "$TESTS_DIR"/opt/*.txt; do
     fi
 done
 
+if "$SCRIPT_DIR/run_io_tests.sh" "$COMPILER"; then
+    echo -e "${GREEN}PASS${NC} tests/io (native binaries)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC} tests/io (native binaries)"
+    FAIL=$((FAIL + 1))
+fi
+
+if "$SCRIPT_DIR/run_ffi_tests.sh" "$COMPILER"; then
+    echo -e "${GREEN}PASS${NC} tests/ffi (native C linking)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC} tests/ffi (native C linking)"
+    FAIL=$((FAIL + 1))
+fi
+
 echo "----------------------------------------"
 echo -e "Passed: ${GREEN}${PASS}${NC}   Failed: ${RED}${FAIL}${NC}"
 

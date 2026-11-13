@@ -141,6 +141,7 @@ KEYWORDS = {
     "exit": "statement",
     "struct": "keyword",
     "fn": "keyword",
+    "extern": "keyword",
     "if": "keyword",
     "else": "keyword",
     "while": "keyword",
@@ -611,17 +612,22 @@ class Param:
 
 
 class FnDeclNode(StmtNode):
-    def __init__(self, line, col, name, params, ret_type, body):
+    def __init__(self, line, col, name, params, ret_type, body, is_extern=False):
         self.line, self.col = line, col
         self.name = name          # str
         self.params = params      # list[Param]
         self.ret_type = ret_type  # str
         self.body = body          # BlockNode
+        self.is_extern = is_extern
 
     def dump(self, indent=0):
         params_str = ", ".join(f"{p.type_name} {p.name}" for p in self.params)
-        print(" " * indent + f"FnDecl {self.name}({params_str}) -> {self.ret_type}")
-        self.body.dump(indent + 2)
+        if self.is_extern:
+            print(" " * indent +
+                  f"ExternFnDecl {self.name}({params_str}) -> {self.ret_type}")
+        else:
+            print(" " * indent + f"FnDecl {self.name}({params_str}) -> {self.ret_type}")
+            self.body.dump(indent + 2)
 
     def accept(self, visitor):
         return visitor.visit_fn_decl(self)
@@ -819,6 +825,11 @@ class Parser:
                     raise_syntax_err(first_tok.line, first_tok.col, "function declarations must come before statements")
                 else:
                     current_phase = "fn"
+            elif first_tok and first_tok.kind == "keyword" and first_tok.text == "extern":
+                if current_phase == "stmt":
+                    raise_syntax_err(first_tok.line, first_tok.col,
+                                     "function declarations must come before statements")
+                current_phase = "fn"
             else:
                 current_phase = "stmt"
 
@@ -863,6 +874,10 @@ class Parser:
             if not is_top_level:
                 raise_syntax_err(tok.line, tok.col, "function declaration not allowed inside a function body")
             return self.parse_fn_decl()
+        elif tok.kind == "keyword" and tok.text == "extern":
+            if not is_top_level:
+                raise_syntax_err(tok.line, tok.col, "'extern' is not allowed here")
+            return self.parse_extern_fn_decl()
         elif tok.kind == "keyword" and tok.text == "if":
             return self.parse_if(inside_fn=inside_fn)
         elif tok.kind == "keyword" and tok.text == "while":
@@ -1075,7 +1090,17 @@ class Parser:
         return ExitNode(exit_tok.line, exit_tok.col, val)
 
     def parse_fn_decl(self):
-        fn_tok = self.eat()  # "fn"
+        return self._parse_fn_decl(self.eat())
+
+    def parse_extern_fn_decl(self):
+        extern_tok = self.eat()
+        fn_tok = self.expect("keyword", "'fn'")
+        if fn_tok.text != "fn":
+            raise_syntax_err(fn_tok.line, fn_tok.col,
+                             f"expected 'fn', got '{fn_tok.text}'")
+        return self._parse_fn_decl(fn_tok, extern_tok=extern_tok)
+
+    def _parse_fn_decl(self, fn_tok, extern_tok=None):
         name_tok = self.expect("ident", "function name")
         self.expect("assignment", "':='")
         self.expect("lparen", "'('")
@@ -1097,6 +1122,19 @@ class Parser:
         if self.peek() is not None:
             leftover = self.peek()
             raise_syntax_err(leftover.line, leftover.col, f"unexpected '{leftover.text}' after function signature")
+
+        if extern_tok is not None:
+            nxt = self.peek_line()
+            if nxt is not None and len(nxt) == 1 and nxt[0].kind == "lbrace":
+                raise_syntax_err(
+                    extern_tok.line,
+                    extern_tok.col,
+                    f"extern function '{name_tok.text}' has no body: it is defined in C",
+                )
+            return FnDeclNode(
+                extern_tok.line, extern_tok.col, name_tok.text, params,
+                ret_tok.text, None, is_extern=True,
+            )
 
         body = self.parse_block(inside_fn=True, requires_exit=True)
         return FnDeclNode(fn_tok.line, fn_tok.col, name_tok.text, params, ret_tok.text, body)
@@ -1431,6 +1469,8 @@ class SemanticChecker:
             elif isinstance(stmt, FnDeclNode):
                 self._register_fn_sig(stmt)
 
+        self._validate_extern_symbol_names()
+
         # Pass 2: check member function bodies (now global fns are all known)
         for stmt in node.stmts:
             if isinstance(stmt, StructDefNode):
@@ -1444,7 +1484,8 @@ class SemanticChecker:
             if isinstance(stmt, StructDefNode):
                 pass  # already done
             elif isinstance(stmt, FnDeclNode):
-                self._check_fn_body(stmt)
+                if not stmt.is_extern:
+                    self._check_fn_body(stmt)
             else:
                 stmt.accept(self)
 
@@ -1469,11 +1510,46 @@ class SemanticChecker:
         for p in node.params:
             self._validate_variable_name(p.name, p.name_line, p.name_col)
             self._validate_type(p.type_name, p.line, p.col)
+            if node.is_extern and p.type_name not in ("i32", "i64"):
+                self._sem_err(
+                    p.line,
+                    p.col,
+                    f"parameter '{p.name}' of extern function '{node.name}' "
+                    f"has type '{p.type_name}': only i32 and i64 cross into C",
+                )
         self._validate_type(node.ret_type, node.line, node.col)
+        if node.is_extern and node.ret_type not in ("i32", "i64"):
+            self._sem_err(
+                node.line,
+                node.col,
+                f"extern function '{node.name}' returns '{node.ret_type}': "
+                "only i32 and i64 cross into C",
+            )
         self.functions[node.name] = node
+
+    def _validate_extern_symbol_names(self):
+        module_names = set(module.globals)
+        module_names.update(
+            f"{struct.name}_{method.name}"
+            for struct in self.structs.values()
+            for method in struct.methods
+        )
+        module_names.update(
+            f"f_{function.name}" for function in self.functions.values()
+            if not function.is_extern
+        )
+        for function in self.functions.values():
+            if function.is_extern and function.name in module_names:
+                self._sem_err(
+                    function.line,
+                    function.col,
+                    f"'{function.name}' is a name the compiler already uses in the module",
+                )
 
     def _check_fn_body(self, node):
         """Type-check the body of a function in its isolated scope."""
+        if node.is_extern:
+            return
         saved_scopes = self.scopes
         saved_fn = self.current_fn
 
@@ -2234,10 +2310,12 @@ class FunctionEffectAnalyzer:
         effectful = {
             function for function in self.functions
             if getattr(function, "is_mutating", False)
+            or getattr(function, "is_extern", False)
         }
 
         for function in self.functions:
-            self._scan(function.body, function, calls, effectful)
+            if function.body is not None:
+                self._scan(function.body, function, calls, effectful)
 
         for function in self.functions:
             pending = list(calls[function])
@@ -2381,7 +2459,8 @@ class UseCounter:
             method.body.accept(self)
 
     def visit_fn_decl(self, node):
-        node.body.accept(self)
+        if node.body is not None:
+            node.body.accept(self)
 
     def visit_lambda(self, node):
         if node.generated_struct is not None:
@@ -2507,7 +2586,8 @@ class UnusedVariablePruner:
 
     def prune_nested(self, stmt):
         if isinstance(stmt, (FnDeclNode, MemberFnDeclNode)):
-            self.prune_block(stmt.body)
+            if stmt.body is not None:
+                self.prune_block(stmt.body)
         elif isinstance(stmt, StructDefNode):
             for method in stmt.methods:
                 self.prune_block(method.body)
@@ -2600,7 +2680,8 @@ class CodeGenVisitor:
                 self._gen_member_fn_body(struct_node, mfn)
         for stmt in node.stmts:
             if isinstance(stmt, FnDeclNode):
-                self._gen_fn_body(stmt)
+                if not stmt.is_extern:
+                    self._gen_fn_body(stmt)
             elif not isinstance(stmt, StructDefNode):
                 stmt.accept(self)
 
@@ -2629,7 +2710,8 @@ class CodeGenVisitor:
         param_types = [TYPES[p.type_name] for p in node.params]
         ret_llvm = TYPES[node.ret_type]
         fn_type = ir.FunctionType(ret_llvm, param_types)
-        ir_fn = ir.Function(module, fn_type, name=f"f_{node.name}")
+        ir_name = node.name if node.is_extern else f"f_{node.name}"
+        ir_fn = ir.Function(module, fn_type, name=ir_name)
         self.ir_functions[node.name] = ir_fn
 
     def _gen_fn_body(self, node):
