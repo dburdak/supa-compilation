@@ -2363,6 +2363,7 @@ class UseCounter:
         self.global_functions = set(global_functions or ())
         self.function_calls = {}
         self.call_effects = call_effects
+        self.lambdas = set()
 
     def read(self, decl):
         if decl is not None:
@@ -2383,6 +2384,8 @@ class UseCounter:
         node.body.accept(self)
 
     def visit_lambda(self, node):
+        if node.generated_struct is not None:
+            self.lambdas.add(node.generated_struct)
         for capture in node.capture_values:
             capture.accept(self)
         node.body.accept(self)
@@ -3129,8 +3132,14 @@ if args.remove_unused:
     ).analyze()
     ast = remove_unused_variables(ast, call_effects)
     ast = remove_unused_functions(ast)
-
-generated_lambdas = checker.generated_lambdas
+    live_lambdas = UseCounter()
+    ast.accept(live_lambdas)
+    generated_lambdas = [
+        struct_node for struct_node in checker.generated_lambdas
+        if struct_node in live_lambdas.lambdas
+    ]
+else:
+    generated_lambdas = checker.generated_lambdas
 
 if args.ast_checked:
     ast.dump()
